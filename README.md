@@ -73,6 +73,27 @@ export function App() {
 }
 ```
 
+## Comment Triggers
+
+By default, comment threads open when users hover over commented text or place the caret inside a commented range. Set `commentTrigger="caret"` when you want hover to keep comments highlighted without opening the thread popover.
+
+```tsx
+import { useState } from "react";
+import { Documint } from "documint";
+
+export function App() {
+  const [content, setContent] = useState("Commented markdown");
+
+  return (
+    <Documint
+      commentTrigger="caret"
+      content={content}
+      onContentChanged={setContent}
+    />
+  );
+}
+```
+
 ## Custom Themes
 
 By default, Documint will detect the end-user's system theme and apply either the built-in light or dark theme. You can also specify a theme explicitly by passing `"light"` or `"dark"` to the `theme` prop, or provide a custom theme object with your own colors and styles.

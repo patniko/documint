@@ -3,6 +3,7 @@ import {
   Documint,
   applyDocumintPatch,
   type CommentChange,
+  type CommentTrigger,
   type Document,
   type DocumentPresence,
   type DocumentUser,
@@ -128,6 +129,7 @@ export function Playground() {
   const [revision, setRevision] = useState(1);
   const [fixtureId, setFixtureId] = useState<string>(fixtureOptions[0].id);
   const [themeId, setThemeId] = useState<string>(themeOptions[0].id);
+  const [commentTrigger, setCommentTrigger] = useState<CommentTrigger>("hover-or-caret");
   const [themePopoverOpen, setThemePopoverOpen] = useState(false);
 
   const [users, setUsers] = useState<DocumentUser[]>([]);
@@ -214,6 +216,18 @@ export function Playground() {
             themeId={themeId}
           />
 
+          <label className="font-controls grid gap-[0.35rem]">
+            <select
+              aria-label="Select comment trigger"
+              className="font-controls w-full rounded-xl border border-border/[0.14] bg-background/90 px-3 py-2"
+              onChange={(event) => setCommentTrigger(event.target.value as CommentTrigger)}
+              value={commentTrigger}
+            >
+              <option value="hover-or-caret">Comments: hover or caret</option>
+              <option value="caret">Comments: caret only</option>
+            </select>
+          </label>
+
           <UsersPopover
             key={`${fixtureId}-users`}
             content={fileContent}
@@ -238,6 +252,7 @@ export function Playground() {
         <div className="grid h-full min-h-0 min-w-0">
           <div className={fixtureSurfaceClassName}>
             <Documint
+              commentTrigger={commentTrigger}
               content={editorContent}
               revision={String(revision)}
               theme={activeTheme ?? undefined}

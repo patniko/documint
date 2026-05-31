@@ -2,6 +2,7 @@ export {
   Documint,
   applyDocumintPatch,
   type CommentChange,
+  type CommentTrigger,
   type DocumintAction,
   type DocumintActions,
   type DocumintDecoration,

@@ -5,6 +5,7 @@ export {
   darkTheme,
   lightTheme,
   type CommentChange,
+  type CommentTrigger,
   type DocumintAction,
   type DocumintActions,
   type DocumintDecoration,

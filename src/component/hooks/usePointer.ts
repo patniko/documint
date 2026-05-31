@@ -31,6 +31,7 @@ import {
   useSprig,
 } from "../store";
 import { pointerViewSprig, type PointerLeaf } from "../overlays/leaves/sprigs";
+import { allowsCommentHover, type CommentTrigger } from "../comment-trigger";
 
 type UsePointerOptions = {
   // DOM refs the hook reads from.
@@ -43,6 +44,7 @@ type UsePointerOptions = {
 
   // Host callbacks the hook invokes.
   autoScrollDuringDrag: (event: PointerEvent<HTMLElement>) => void;
+  commentTrigger: CommentTrigger;
   focusInput: FocusInput;
   isEditable: boolean;
   onActivity: () => void;
@@ -70,6 +72,7 @@ type LeafHoverHandlers = {
 
 type PointerController = {
   canvasHandlers: CanvasPointerHandlers;
+  commentThreadIndex: number | null;
   cursor: "pointer" | "text";
   leaf: PointerLeaf | null;
   leafHandlers: LeafHoverHandlers;
@@ -152,6 +155,7 @@ export function resolveHorizontalSwipeDirection(
 export function usePointer({
   autoScrollDuringDrag,
   canvasRef,
+  commentTrigger,
   focusInput,
   isEditable,
   onActivity,
@@ -172,7 +176,11 @@ export function usePointer({
   const toggleTaskItem = useEditorCommand(toggleTask);
   const dragEditorSelection = useEditorCommand(updateSelectionFromDrag);
   const [hoverTarget, setHoverTarget] = useState<EditorHoverTarget | null>(null);
-  const { cursor, leaf } = useSprig(pointerViewSprig, hoverTarget);
+  const { commentThreadIndex, cursor, leaf } = useSprig(
+    pointerViewSprig,
+    hoverTarget,
+    commentTrigger,
+  );
   const hideTimeoutRef = useRef<number | null>(null);
   const isLeafHoveredRef = useRef(false);
   // Drag-to-select uses pointer capture; `lastPointerTypeRef` lets `click`
@@ -194,11 +202,12 @@ export function usePointer({
       hoverTarget &&
       hoverTarget.kind !== "task-toggle" &&
       hoverTarget.kind !== "resource" &&
+      commentThreadIndex === null &&
       !leaf
     ) {
       setHoverTarget(null);
     }
-  }, [hoverTarget, leaf]);
+  }, [commentThreadIndex, hoverTarget, leaf]);
 
   // Cancel any in-flight hide on unmount so we don't call setState on a
   // torn-down hook.
@@ -251,7 +260,7 @@ export function usePointer({
       return;
     }
 
-    if (target.commentThreadIndex !== null) {
+    if (target.commentThreadIndex !== null && allowsCommentHover(commentTrigger)) {
       cancelHide();
       const threadIndex = target.commentThreadIndex;
       setHoverTarget((previous) =>
@@ -265,12 +274,27 @@ export function usePointer({
     if (target.kind === "resource") {
       cancelHide();
       setHoverTarget((previous) =>
-        previous?.kind === "resource" && previous.url === target.url ? previous : target,
+        previous?.kind === "resource" &&
+        previous.url === target.url &&
+        previous.commentThreadIndex === target.commentThreadIndex
+          ? previous
+          : target,
       );
       return;
     }
 
     if (target.kind !== "link") {
+      if (target.commentThreadIndex !== null) {
+        cancelHide();
+        const threadIndex = target.commentThreadIndex;
+        setHoverTarget((previous) =>
+          previous?.kind === "text" && previous.commentThreadIndex === threadIndex
+            ? previous
+            : target,
+        );
+        return;
+      }
+
       clearLeafIfPointerIsOutsideLeaf();
       return;
     }
@@ -281,7 +305,8 @@ export function usePointer({
       previous.title === target.title &&
       previous.url === target.url &&
       previous.startOffset === target.startOffset &&
-      previous.endOffset === target.endOffset
+      previous.endOffset === target.endOffset &&
+      previous.commentThreadIndex === target.commentThreadIndex
         ? previous
         : target,
     );
@@ -610,6 +635,7 @@ export function usePointer({
       onPointerMove: handlePointerMove,
       onPointerUp: handlePointerUp,
     },
+    commentThreadIndex,
     cursor,
     leaf,
     leafHandlers: {

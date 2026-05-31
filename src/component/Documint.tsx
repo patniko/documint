@@ -82,6 +82,7 @@ import { DocumentStorage } from "./lib/storage";
 import { type DocumintPatch } from "@/sync/content-patch";
 import { useDecorations, type DocumintDecoration } from "./hooks/useDecorations";
 import { useSync, type UserMentionEvent } from "./hooks/useSync";
+import { defaultCommentTrigger, type CommentTrigger } from "./comment-trigger";
 import {
   activeCommentIndexSprig,
   commentRangesSprig,
@@ -101,6 +102,7 @@ import { DOCUMINT_EDITOR_STYLES } from "./styles";
 export type { DocumintDecoration } from "./hooks/useDecorations";
 export type { ActiveResourceSet, ResourceProtocolRecord } from "./hooks/useResources";
 export type { UserMentionEvent } from "./hooks/useSync";
+export type { CommentTrigger } from "./comment-trigger";
 export type { DocumintPatch, DocumintPatchChange } from "@/sync/content-patch";
 export { applyDocumintPatch } from "@/sync/content-patch";
 
@@ -118,6 +120,7 @@ export type DocumintProps = {
   resources?: ActiveResourceSet;
   storage?: DocumintStorage;
   users?: DocumentUser[];
+  commentTrigger?: CommentTrigger;
 
   // When `revision` is provided, `patch` is emitted for patchable edits and
   // `content` is only the snapshot fallback when `patch` is null.
@@ -201,6 +204,7 @@ export function Documint({ content, ...props }: DocumintProps) {
 function DocumintHost({
   actions,
   className,
+  commentTrigger = defaultCommentTrigger,
   content,
   keybindings,
   decorations,
@@ -591,6 +595,7 @@ function DocumintHost({
   const pointer = usePointer({
     autoScrollDuringDrag,
     canvasRef: contentCanvasRef,
+    commentTrigger,
     focusInput: input.focus,
     isEditable,
     onActivity: idle.markActive,
@@ -598,8 +603,7 @@ function DocumintHost({
     resolvePoint,
     storage: documentStorage,
   });
-  const hoveredCommentThreadIndex =
-    pointer.leaf?.kind === "thread" ? pointer.leaf.threadIndex : null;
+  const hoveredCommentThreadIndex = pointer.commentThreadIndex;
 
   const scrollToPresence = useEffectEvent((target: EditorPresence) => {
     if (!target.viewport || target.viewport.status === "unresolved") {

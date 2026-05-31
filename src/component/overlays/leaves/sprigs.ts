@@ -19,6 +19,7 @@ import {
 } from "@/editor";
 import { createParameterizedSprig } from "../../store/core/computed";
 import { equalByKind, equalNullable } from "../../store/core/equality";
+import { allowsCommentHover, type CommentTrigger } from "../../comment-trigger";
 import {
   commentRangesSprig,
   commentThreadsSprig,
@@ -59,6 +60,7 @@ export type CursorLeaf = InsertionLeaf | LinkLeaf | TableLeaf | ThreadLeaf;
 export type PointerLeaf = ContextualLeaf;
 
 export type PointerView = {
+  commentThreadIndex: number | null;
   cursor: "pointer" | "text";
   leaf: PointerLeaf | null;
 };
@@ -130,7 +132,11 @@ const equalCursorLeaves = equalNullable(
 const equalPointerLeaves = equalNullable<PointerLeaf>(equalContextualLeaves);
 
 function equalPointerViews(previous: PointerView, next: PointerView) {
-  return previous.cursor === next.cursor && equalPointerLeaves(previous.leaf, next.leaf);
+  return (
+    previous.commentThreadIndex === next.commentThreadIndex &&
+    previous.cursor === next.cursor &&
+    equalPointerLeaves(previous.leaf, next.leaf)
+  );
 }
 
 /* Sprigs */
@@ -193,19 +199,24 @@ export const pointerViewSprig = createParameterizedSprig(
   [editorStateSprig, commentThreadsSprig, commentRangesSprig],
   (
     _store,
-    [hoverTarget]: readonly [EditorHoverTarget | null],
+    [hoverTarget, commentTrigger]: readonly [EditorHoverTarget | null, CommentTrigger],
     state,
     threads,
     ranges,
   ): PointerView => {
-    const target =
+    const resolvedTarget =
       hoverTarget?.kind === "link"
         ? resolveTargetAtSelection(state, {
             regionId: hoverTarget.regionId,
             offset: resolveLinkInteriorOffset(hoverTarget),
           })
         : hoverTarget;
-    const leaf = resolveContextualLeaf(target, threads, ranges);
+    const commentThreadIndex = resolvePointerCommentThreadIndex(resolvedTarget, threads, ranges);
+    const leaf = resolveContextualLeaf(
+      allowsCommentHover(commentTrigger) ? resolvedTarget : withoutCommentThread(resolvedTarget),
+      threads,
+      ranges,
+    );
     const cursor =
       hoverTarget?.kind === "task-toggle" ||
       hoverTarget?.kind === "resource" ||
@@ -213,7 +224,7 @@ export const pointerViewSprig = createParameterizedSprig(
         ? "pointer"
         : "text";
 
-    return { cursor, leaf };
+    return { commentThreadIndex, cursor, leaf };
   },
   equalPointerViews,
 );
@@ -394,6 +405,30 @@ function resolveInsertionLeaf(state: EditorState): InsertionLeaf | null {
   }
 
   return { anchor: focus, kind: "insertion" };
+}
+
+function resolvePointerCommentThreadIndex(
+  target: EditorHoverTarget | null,
+  threads: CommentThreads,
+  ranges: CommentRanges,
+) {
+  if (!target || target.kind === "task-toggle" || target.commentThreadIndex === null) {
+    return null;
+  }
+
+  const thread = threads[target.commentThreadIndex] ?? null;
+  const range =
+    ranges.find((entry) => entry.threadIndex === target.commentThreadIndex) ?? null;
+
+  return thread && range ? target.commentThreadIndex : null;
+}
+
+function withoutCommentThread(target: EditorHoverTarget | null): EditorHoverTarget | null {
+  if (!target || target.kind === "task-toggle" || target.commentThreadIndex === null) {
+    return target;
+  }
+
+  return { ...target, commentThreadIndex: null };
 }
 
 function resolveLinkInteriorOffset(target: Extract<EditorHoverTarget, { kind: "link" }>) {
