@@ -1,0 +1,9 @@
+This package, @patniko/documint, is a fork of the `documint` project
+originally created by Jonathan Carter (https://github.com/lostintangent/documint).
+
+The fork was made with the original author's informal permission after he
+indicated he was stepping away from active maintenance. This fork is
+maintained independently and is not endorsed by the original author.
+
+Original project: https://github.com/lostintangent/documint
+Fork:             https://github.com/patniko/documint

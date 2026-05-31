@@ -1,9 +1,18 @@
 {
-  "name": "documint",
+  "name": "@patniko/documint",
   "version": "0.0.23",
+  "description": "Fork of lostintangent/documint — a canvas-based, batteries-included markdown editor for React.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/patniko/documint.git"
+  },
+  "license": "MIT",
   "files": [
     "dist/index.js",
-    "dist/index.d.ts"
+    "dist/index.d.ts",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
   ],
   "type": "module",
   "main": "./dist/index.js",
