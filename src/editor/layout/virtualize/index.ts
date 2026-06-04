@@ -1,6 +1,6 @@
 // Owns large-document layout virtualization: whole-document height estimates,
-// viewport slice selection, exact slice measurement, and refinement of cached
-// estimates from measured geometry.
+// viewport slice selection, exact slice measurement, and deterministic
+// rebuild of cached estimates from newly measured container heights.
 
 import type { Block } from "@/document";
 import type { DocumentResources } from "@/types";
@@ -8,7 +8,6 @@ import { type DocumentIndex, type EditorState } from "../../state";
 import { type LayoutCache } from "../state/cache";
 import type { DocumentLayoutOptions } from "../lib/options";
 import { measureLayoutSlice, type DocumentLayout } from "../measure";
-import { refineVirtualLayoutWithMeasuredSlice } from "./refinement";
 import {
   expandViewportSliceToBlockBoundaries,
   findVirtualLayoutEntryIndexAtOrAfter,
@@ -97,6 +96,7 @@ export function createVirtualizedLayoutSlice({
   }
 
   let layout: DocumentLayout;
+  let activeVirtualLayout = virtualLayout;
 
   if (!Number.isFinite(sliceStartIndex) || !Number.isFinite(sliceEndIndex)) {
     layout = measureLayoutSlice(
@@ -139,17 +139,32 @@ export function createVirtualizedLayoutSlice({
 
     updateMeasuredContainerHeights(cache, documentIndex, layout, options, resources);
 
-    if (refineVirtualLayoutWithMeasuredSlice(virtualLayout, documentIndex, layout)) {
-      layout = {
-        ...layout,
-        height: virtualLayout.totalHeight,
-      };
+    // Re-resolve the virtual layout after the slice has been measured. The
+    // measurement may have written new heights to the measured-container-
+    // height cache, which bumps `cache.measurementVersion`; that signals
+    // `getOrCreateVirtualLayout` to rebuild deterministically from the
+    // updated cache instead of mutating the previously cached entries via
+    // an order-dependent offset propagation. Regions before the slice
+    // weren't measured in this pass, so their cumulative top is unchanged
+    // and the slice's `regionBounds` (anchored at `sliceTop`) stay aligned
+    // with the rebuilt `entries[expandedSlice.startIndex].top`.
+    activeVirtualLayout = getOrCreateVirtualLayout(
+      cache,
+      documentIndex,
+      blockMap,
+      runtimeBlocks,
+      options,
+      resources,
+    );
+
+    if (activeVirtualLayout !== virtualLayout) {
+      layout = { ...layout, height: activeVirtualLayout.totalHeight };
     }
   }
 
   return {
-    estimateRegionBounds: virtualLayout.estimateRegionBounds,
+    estimateRegionBounds: activeVirtualLayout.estimateRegionBounds,
     layout,
-    totalHeight: virtualLayout.totalHeight,
+    totalHeight: activeVirtualLayout.totalHeight,
   };
 }

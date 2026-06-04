@@ -18,7 +18,11 @@ import type { DocumentLayoutOptions } from "../lib/options";
 import { resolveBlockGap } from "../lib/block-spacing";
 import { TABLE_CELL_PADDING_X, TABLE_CELL_PADDING_Y, TABLE_MIN_WIDTH } from "../measure/table";
 import { resolveTextBlockLineHeight } from "../measure/text";
-import { estimateContainerHeight, estimateTableCellHeight } from "./height-estimate";
+import {
+  createContainerHeightCacheKey,
+  estimateContainerHeight,
+  estimateTableCellHeight,
+} from "./height-estimate";
 
 export function getOrCreateVirtualLayout(
   cache: LayoutCache,
@@ -31,7 +35,17 @@ export function getOrCreateVirtualLayout(
   const cacheKey = createVirtualLayoutCacheKey(documentIndex, options, resources);
   const cached = getVirtualLayout(cache, documentIndex, cacheKey);
 
-  if (cached) {
+  // The cached virtual layout's `entries` are a function of:
+  //   1. The cache key inputs (options, resources, image signatures), and
+  //   2. The current state of `cache.measuredContainerHeights` — once a
+  //      region's exact height is cached, the next walk uses it instead of
+  //      the cheap text-based estimate.
+  // We reuse the cached layout only if both are still valid. Comparing
+  // `measurementVersion` against the live counter detects newly cached
+  // measurements (and evictions) and forces a deterministic rebuild from
+  // the updated cache instead of inheriting any drift accumulated from
+  // prior, scroll-order-dependent mutations.
+  if (cached && cached.measurementVersion === cache.measurementVersion) {
     return cached;
   }
 
@@ -72,10 +86,12 @@ export function getOrCreateVirtualLayout(
     } else if (block.type === "table") {
       const result = appendTableEstimateEntries({
         block,
+        cache,
         containerIndices,
         entries,
         index: regionCursor,
         options,
+        resources,
         runtimeBlocks,
         totalHeight,
         regions: documentIndex.regions,
@@ -121,25 +137,30 @@ export function getOrCreateVirtualLayout(
 
       return index === undefined ? null : (entries[index] ?? null);
     },
+    measurementVersion: cache.measurementVersion,
     totalHeight,
   });
 }
 
 function appendTableEstimateEntries({
   block,
+  cache,
   containerIndices,
   entries,
   index,
   options,
+  resources,
   runtimeBlocks,
   totalHeight,
   regions,
 }: {
   block: Extract<Block, { type: "table" }>;
+  cache: LayoutCache;
   containerIndices: Map<string, number>;
   entries: VirtualLayout["entries"];
   index: number;
   options: DocumentLayoutOptions;
+  resources: DocumentResources;
   runtimeBlocks: Map<string, DocumentIndex["blocks"][number]>;
   totalHeight: number;
   regions: DocumentIndex["regions"];
@@ -171,10 +192,8 @@ function appendTableEstimateEntries({
     const cells = rowCells.get(rowIndex) ?? [];
     const rowHeight = Math.max(
       lineHeight + TABLE_CELL_PADDING_Y * 2,
-      ...cells.map(
-        ({ region }) =>
-          estimateTableCellHeight(region, cellWidth, lineHeight, options.charWidth) +
-          TABLE_CELL_PADDING_Y * 2,
+      ...cells.map(({ region }) =>
+        resolveTableCellHeight(cache, region, cellWidth, lineHeight, options, resources),
       ),
     );
     const bottom = nextTop + rowHeight;
@@ -229,6 +248,38 @@ function collectTableRowRegions(regions: DocumentIndex["regions"], startIndex: n
   }
 
   return rows;
+}
+
+// Resolves a table cell's row-height contribution (text height plus vertical
+// padding). When the cell's exact measured height is in the layout cache —
+// previously written by `updateMeasuredContainerHeights` after the cell was
+// included in an exact slice — we use it directly: cached cells store the
+// full row height (rowHeight = max(cell text heights) + 2 × padding), with
+// every cell in the same row stamped with the identical value by
+// `layoutTable`. Returning it as-is preserves the row contribution; the
+// `Math.max` across cells in the calling row resolves trivially to that
+// same value. Without a cached measurement we fall back to the cheap text
+// estimate plus padding so the estimator still produces a usable layout
+// before the row has been scrolled into view.
+function resolveTableCellHeight(
+  cache: LayoutCache,
+  region: EditableRegion,
+  cellWidth: number,
+  lineHeight: number,
+  options: DocumentLayoutOptions,
+  resources: DocumentResources,
+) {
+  const cacheKey = createContainerHeightCacheKey(region, 0, 0, options, resources);
+  const cached = cache.measuredContainerHeights.get(cacheKey);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  return (
+    estimateTableCellHeight(region, cellWidth, lineHeight, options.charWidth) +
+    TABLE_CELL_PADDING_Y * 2
+  );
 }
 
 function createVirtualLayoutCacheKey(

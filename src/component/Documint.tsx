@@ -2,7 +2,15 @@
  * Public React host for the canvas editor. The component owns content-format
  * bridging, DOM lifecycle, viewport coordination, and hidden-input plumbing.
  */
-import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, type UIEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  type UIEvent,
+} from "react";
 import {
   extractPlainTextFromFragment,
   type Comment,
@@ -255,7 +263,13 @@ function DocumintHost({
     [images, resourceRegistry],
   );
 
+  const scheduleFullRenderRef = useRef<(() => void) | null>(null);
+  const requestScrollSettleRender = useCallback(() => {
+    scheduleFullRenderRef.current?.();
+  }, []);
+
   const viewport = useViewport({
+    onScrollSettle: requestScrollSettleRender,
     renderResources,
     theme: preferredTheme,
   });
@@ -540,6 +554,13 @@ function DocumintHost({
       renderOverlay,
       renderViewport,
     });
+
+  // Late-bind the scheduler for `useViewport`'s scroll-settle callback. The
+  // viewport is constructed before the scheduler (the scheduler reads
+  // `layout` from the viewport), so we publish `scheduleFullRender` via a
+  // ref that `requestScrollSettleRender` reads through when the settle
+  // timer fires after `SCROLL_SETTLE_MS` of scroll quiescence.
+  scheduleFullRenderRef.current = scheduleFullRender;
 
   // Sync `useViewport`'s scroll metrics and schedule a render after any
   // scroll position change — whether driven by the user (native scroll event)

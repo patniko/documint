@@ -31,5 +31,5 @@ Small/common documents use exact full-document layout. Large documents use whole
 - `lib/` owns shared layout policy: options, block spacing, and list/task marker metrics.
 - `state/` owns `createEditorLayoutState` and the per-editor `LayoutCache`.
 - `measure/` owns exact layout composition for text, inline objects, tables, lines, regions, and blocks.
-- `virtualize/` owns large-document estimates, virtual layout construction, visible slice selection, exact slice measurement, and refinement.
+- `virtualize/` owns large-document estimates, virtual layout construction, visible slice selection, exact slice measurement, and deterministic rebuild from cached measured heights as the user scrolls past more regions.
 - `query/` owns reads over prepared geometry: visible ranges, caret measurement, point-to-line hit testing, and visual bounds.

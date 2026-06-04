@@ -13,6 +13,11 @@ export type VirtualLayout = {
     top: number;
   }>;
   estimateRegionBounds: (regionId: string) => { bottom: number; top: number } | null;
+  // Snapshot of `cache.measurementVersion` when this virtualLayout was built.
+  // Consumers compare against the live cache counter to detect when newly
+  // measured container heights have invalidated the cached entries, and
+  // trigger a deterministic rebuild from the updated cache.
+  measurementVersion: number;
   totalHeight: number;
 };
 
@@ -20,6 +25,14 @@ export type LayoutCache = {
   graphemeWidths: Map<string, Map<string, number>>;
   lineBoundaries: Map<string, LineBoundary[]>;
   measuredContainerHeights: Map<string, number>;
+  // Monotonically increasing counter bumped on every effective change to
+  // `measuredContainerHeights` (insert with a different value, value update,
+  // or LRU eviction). Cached `VirtualLayout` instances stamp the version at
+  // build time so subsequent reads can tell whether the cache state they
+  // were built from is still current — without that signal, the cached
+  // entries drift from the canonical "sum of cached heights" geometry as
+  // scrolling accrues new measurements.
+  measurementVersion: number;
   measuredLines: Map<
     string,
     Array<{
@@ -45,6 +58,7 @@ export function createLayoutCache(): LayoutCache {
     graphemeWidths: new Map(),
     lineBoundaries: new Map(),
     measuredContainerHeights: new Map(),
+    measurementVersion: 0,
     measuredLines: new Map(),
     preparedText: new Map(),
     virtualLayouts: new WeakMap(),
@@ -78,6 +92,23 @@ export function cacheLineBoundaries(cache: LayoutCache, key: string, value: Line
 }
 
 export function cacheMeasuredContainerHeight(cache: LayoutCache, key: string, value: number) {
+  const existing = cache.measuredContainerHeights.get(key);
+
+  // Bump the version on any effective measurement change so cached virtual
+  // layouts rebuild deterministically on the next read:
+  //   - `existing !== value` covers both updates (different number for the
+  //     same key) and new keys (where `existing === undefined`). A new key
+  //     also covers the eviction case: a fresh insert that pushes the cache
+  //     over its bound silently drops the oldest entry, and the dropped
+  //     entry's loss is itself a measurement change.
+  //   - When `existing === value` the call is a pure no-op for the cache's
+  //     observable state (the bounded map's LRU reordering doesn't change
+  //     which heights are visible), so we skip the bump to avoid forcing
+  //     unnecessary virtual-layout rebuilds.
+  if (existing !== value) {
+    cache.measurementVersion += 1;
+  }
+
   return cacheBoundedValue(
     cache.measuredContainerHeights,
     key,

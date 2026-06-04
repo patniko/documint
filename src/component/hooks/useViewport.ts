@@ -32,9 +32,23 @@ const DRAG_AUTO_SCROLL_EDGE_THRESHOLD = 28;
 // Pixels scrolled per pointer-move event while autoscrolling.
 const DRAG_AUTO_SCROLL_INCREMENT = 18;
 
+// How long after the last native scroll event the viewport is still
+// considered "actively scrolling". While active, `commitLayout` only
+// allows `scrollContentHeight` to grow — never shrink — so the native
+// scrollbar drag does not get remapped by the browser when virtualized
+// height estimates converge to the slightly smaller measured totals.
+// After this window, a follow-up render commits the deferred shrink so
+// the content stays sized to the actual document.
+const SCROLL_SETTLE_MS = 250;
+
 type UseViewportOptions = {
   renderResources: DocumentResources | null;
   theme: ResolvedEditorTheme;
+  // Invoked after native scrolling has been quiet for `SCROLL_SETTLE_MS`.
+  // The host wires this to its render scheduler so a fresh commit can
+  // apply any `scrollContentHeight` shrink that was deferred while the
+  // user was actively dragging the scrollbar (see `commitLayout` below).
+  onScrollSettle?: () => void;
 };
 
 export type ViewportController = {
@@ -125,13 +139,19 @@ export type ViewportController = {
  *     the other hooks that need them — this hook is the single owner of
  *     coordinate translation and drag-edge autoscroll.
  */
-export function useViewport({ renderResources, theme }: UseViewportOptions): ViewportController {
+export function useViewport({
+  onScrollSettle,
+  renderResources,
+  theme,
+}: UseViewportOptions): ViewportController {
   /* Internal state */
 
   const store = useDocumintStore();
   const layoutCacheRef = useRef(createLayoutCache());
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const viewportMetricsRef = useRef<ViewportMetrics>({ height: 240, top: 0 });
+  const lastNativeScrollAtRef = useRef<number>(Number.NEGATIVE_INFINITY);
+  const scrollSettleTimerRef = useRef<number | null>(null);
   const [measuredViewportWidth, setMeasuredViewportWidth] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(240);
   const [viewportTop, setViewportTopState] = useState(0);
@@ -186,7 +206,28 @@ export function useViewport({ renderResources, theme }: UseViewportOptions): Vie
     const layoutState = store.layout.commit();
     setScrollContentHeight((previous) => {
       const nextHeight = resolveScrollContentHeight(layoutState, viewportMetricsRef.current.height);
-      return previous === nextHeight ? previous : nextHeight;
+
+      if (nextHeight === previous) {
+        return previous;
+      }
+
+      // Defer shrinking while the user is actively scrolling. The browser
+      // computes the scrollbar thumb position from `contentHeight`, so a
+      // mid-drag shrink remaps `scrollTop` and the canvas appears to jump
+      // out from under the user. Virtualized layout legitimately publishes
+      // smaller totals as cheap estimates get replaced by exact measurements,
+      // but holding the previous (larger) height is harmless during the
+      // drag — the scroll container just has a few stale pixels of empty
+      // tail. The follow-up `onScrollSettle` render after `SCROLL_SETTLE_MS`
+      // commits the shrink once dragging quiesces.
+      if (
+        nextHeight < previous &&
+        performance.now() - lastNativeScrollAtRef.current < SCROLL_SETTLE_MS
+      ) {
+        return previous;
+      }
+
+      return nextHeight;
     });
     return layoutState;
   });
@@ -210,6 +251,18 @@ export function useViewport({ renderResources, theme }: UseViewportOptions): Vie
     // `setViewportTop`; this keeps the two paths consistent.)
     if (topChanged) {
       layout.invalidate();
+      // Track this scroll event so `commitLayout` can detect whether the
+      // user is mid-drag and defer scroll-content shrinks. Re-arm the
+      // settle timer so the deferred shrink (if any) lands on the next
+      // host-scheduled render after scrolling quiesces.
+      lastNativeScrollAtRef.current = performance.now();
+      if (scrollSettleTimerRef.current !== null) {
+        window.clearTimeout(scrollSettleTimerRef.current);
+      }
+      scrollSettleTimerRef.current = window.setTimeout(() => {
+        scrollSettleTimerRef.current = null;
+        onScrollSettle?.();
+      }, SCROLL_SETTLE_MS);
     }
   });
 
@@ -333,6 +386,17 @@ export function useViewport({ renderResources, theme }: UseViewportOptions): Vie
     observer.observe(scrollContainer);
     return () => observer.disconnect();
   }, [scrollContainerRef]);
+
+  // Cancel any pending scroll-settle render on unmount so we don't fire a
+  // host callback into a torn-down tree.
+  useEffect(() => {
+    return () => {
+      if (scrollSettleTimerRef.current !== null) {
+        window.clearTimeout(scrollSettleTimerRef.current);
+        scrollSettleTimerRef.current = null;
+      }
+    };
+  }, []);
 
   /* Public API */
 
