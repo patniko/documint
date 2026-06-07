@@ -1,6 +1,7 @@
+import type {} from "./env";
+
 export {
   Documint,
-  applyDocumintPatch,
   defaultKeybindings,
   darkTheme,
   lightTheme,
@@ -10,8 +11,6 @@ export {
   type DocumintActions,
   type DocumintDecoration,
   type DocumintLeafPlacement,
-  type DocumintPatch,
-  type DocumintPatchChange,
   type EditorInputKeybinding,
   type DocumintProps,
   type DocumintSideColumnOptions,
@@ -35,7 +34,7 @@ export type {
   EditorTheme,
 } from "./types";
 
-export { normalizeResourceProtocol, resolveResourceProtocol } from "./resources";
+export { normalizeResourceProtocol, resolveResourceProtocol } from "./document";
 
 export type {
   Anchor,

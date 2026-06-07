@@ -33,7 +33,44 @@ const leadingSpaceEntity = "&#x20;";
  * serialization, which wants the bare block payload.
  */
 export function serializeBlocks(blocks: Block[], options: MarkdownOptions = {}): string {
-  return blocks.map((block) => serializeBlock(block, 0, options)).join(blockSeparator);
+  if (blocks.length === 0) {
+    return "";
+  }
+
+  const optionsKey = resolveSerializationOptionsKey(options);
+
+  return blocks
+    .map((block) => serializeCachedRootBlock(block, options, optionsKey))
+    .join(blockSeparator);
+}
+
+const serializedRootCache = new WeakMap<Block, Map<string, string>>();
+
+function serializeCachedRootBlock(
+  block: Block,
+  options: MarkdownOptions,
+  optionsKey = resolveSerializationOptionsKey(options),
+) {
+  const cachedByOptions = serializedRootCache.get(block);
+  const cached = cachedByOptions?.get(optionsKey);
+
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const markdown = serializeBlock(block, 0, options);
+  const nextCachedByOptions = cachedByOptions ?? new Map<string, string>();
+
+  nextCachedByOptions.set(optionsKey, markdown);
+  if (!cachedByOptions) {
+    serializedRootCache.set(block, nextCachedByOptions);
+  }
+
+  return markdown;
+}
+
+function resolveSerializationOptionsKey(options: MarkdownOptions) {
+  return options.padTableColumns ? "pad-tables" : "";
 }
 
 function serializeBlock(block: Block, indent: number, options: MarkdownOptions): string {
@@ -131,10 +168,11 @@ function serializeHeading(block: Extract<Block, { type: "heading" }>, indent: nu
 
 function serializeList(block: ListBlock, indent: number, options: MarkdownOptions) {
   const markerNumber = block.start ?? 1;
+  const itemSeparator = serializeListSeparator(block.compact);
 
   return block.items
     .map((item) => serializeListItem(item, indent, block.ordered, markerNumber, options))
-    .join(block.spread ? blockSeparator : lineFeed);
+    .join(itemSeparator);
 }
 
 function serializeListItem(
@@ -161,15 +199,20 @@ function serializeListItem(
     checkbox.length > 0,
     options,
   );
+  const childSeparator = serializeListSeparator(block.compact);
   const tail = rest
     .map((child) => serializeBlock(child, childIndent, options))
-    .join(block.spread ? blockSeparator : lineFeed);
+    .join(childSeparator);
 
   if (!tail) {
     return firstContent;
   }
 
-  return `${firstContent}${block.spread ? blockSeparator : lineFeed}${tail}`;
+  return `${firstContent}${childSeparator}${tail}`;
+}
+
+function serializeListSeparator(compact: boolean) {
+  return compact ? lineFeed : blockSeparator;
 }
 
 function serializeListItemFirstChild(

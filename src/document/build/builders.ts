@@ -11,8 +11,8 @@ import {
   extractPlainTextFromInlineNodes,
   extractTablePlainText,
 } from "../query/text";
-import { canonicalizeMarks } from "../marks";
-import { normalizeResourceProtocol, resolveResourceProtocol } from "@/resources";
+import { canonicalizeMarks } from "../model/marks";
+import { normalizeResourceProtocol, resolveResourceProtocol } from "../model/resources";
 import type {
   Block,
   BlockquoteBlock,
@@ -37,7 +37,7 @@ import type {
   TableCell,
   TableRow,
   Text,
-} from "../types";
+} from "../model/types";
 
 export function createParagraphBlock(children: Inline[]): ParagraphBlock {
   return {
@@ -159,30 +159,30 @@ export function createRaw(options: { originalType: string; source: string }): Ra
 export function createListItemBlock(options: {
   checked?: boolean | null;
   children: Block[];
-  spread?: boolean;
+  compact?: boolean;
 }): ListItemBlock {
   return {
     checked: options.checked ?? null,
     children: options.children,
+    compact: options.compact ?? true,
     id: "",
     plainText: extractPlainTextFromBlockNodes(options.children),
-    spread: options.spread ?? false,
     type: "listItem",
   };
 }
 
 export function createListBlock(options: {
+  compact?: boolean;
   items: ListItemBlock[];
   ordered: boolean;
-  spread?: boolean;
   start?: number | null;
 }): ListBlock {
   return {
+    compact: options.compact ?? true,
     id: "",
     items: options.items,
     ordered: options.ordered,
     plainText: extractListPlainText(options.items),
-    spread: options.spread ?? false,
     start: options.start ?? null,
     type: "list",
   };
@@ -286,19 +286,19 @@ export function rebuildListItemBlock(block: ListItemBlock, children: Block[]): L
   return createListItemBlock({
     checked: block.checked,
     children,
-    spread: block.spread,
+    compact: block.compact,
   });
 }
 
 export function rebuildListBlock(
   block: ListBlock,
   items: ListItemBlock[],
-  overrides: Partial<Pick<ListBlock, "ordered" | "spread" | "start">> = {},
+  overrides: Partial<Pick<ListBlock, "compact" | "ordered" | "start">> = {},
 ): ListBlock {
   return createListBlock({
+    compact: overrides.compact ?? block.compact,
     items,
     ordered: overrides.ordered ?? block.ordered,
-    spread: overrides.spread ?? block.spread,
     start: overrides.start ?? block.start,
   });
 }

@@ -1,17 +1,17 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Documint,
-  applyDocumintPatch,
+  darkTheme,
+  lightTheme,
   type CommentChange,
   type CommentTrigger,
-  type Document,
   type DocumentPresence,
   type DocumentUser,
   type DocumintActions,
   type DocumintDecoration,
   type DocumintLeafPlacement,
-  type DocumintPatch,
   type DocumintStorage,
+  type DocumintTheme,
   type UserMentionEvent,
   lucideResourceIcon,
 } from "documint";
@@ -19,6 +19,7 @@ import { Hand } from "lucide-react";
 import dynamicIconImports from "lucide-react/dynamicIconImports";
 import { HostEventPanel } from "./components/HostEventPanel";
 import { DiagnosticsPopover } from "./components/popovers/DiagnosticsPopover";
+import { FrameDebugOverlay } from "./components/FrameDebugOverlay";
 import { UsersPopover } from "./components/popovers/UsersPopover";
 import { ThemePopover } from "./components/popovers/ThemePopover";
 import {
@@ -131,54 +132,50 @@ const fixtureSurfaceClassName =
   "grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden rounded-2xl border border-border/[0.08] bg-background/[0.82] max-[700px]:portrait:h-auto";
 
 export function Playground() {
-  const [fileContent, setFileContent] = useState<string>(fixtureOptions[0].markdown);
-  const [editorContent, setEditorContent] = useState<string>(fixtureOptions[0].markdown);
-  const [revision, setRevision] = useState(1);
+  const [content, setContent] = useState<string>(fixtureOptions[0].markdown);
   const [fixtureId, setFixtureId] = useState<string>(fixtureOptions[0].id);
   const [themeId, setThemeId] = useState<string>(themeOptions[0].id);
   const [commentTrigger, setCommentTrigger] = useState<CommentTrigger>("hover-or-caret");
   const [leafPlacement, setLeafPlacement] = useState<DocumintLeafPlacement>("inline");
   const [themePopoverOpen, setThemePopoverOpen] = useState(false);
+  const [fontSize, setFontSize] = useState<number>(16);
 
   const [users, setUsers] = useState<DocumentUser[]>([]);
   const [presence, setPresence] = useState<DocumentPresence[]>([]);
 
   const [lastHostEvent, setLastHostEvent] = useState<PlaygroundHostEvent | null>(null);
   const [hostEventVisible, setHostEventVisible] = useState(false);
+  const [frameDebugEnabled, setFrameDebugEnabled] = useState(false);
 
   const { theme: activeTheme } = getThemeOption(themeId);
 
-  const mentionUsers = users.some((user) => user.id === demoUser.id) ? users : [demoUser, ...users];
+  // Merge the playground's `fontSize` knob into whichever theme is selected.
+  // For "system theme" (activeTheme = null), pass a light/dark pair sourced
+  // from the bundled themes so the embedder layer still does its own system
+  // color-scheme matching while honoring our fontSize choice. Memoize so
+  // Documint sees a stable theme object across renders that don't change
+  // either input.
+  const documintTheme = useMemo<DocumintTheme>(() => {
+    if (!activeTheme) {
+      return {
+        dark: { ...darkTheme, fontSize },
+        light: { ...lightTheme, fontSize },
+      };
+    }
+    return { ...activeTheme, fontSize };
+  }, [activeTheme, fontSize]);
 
-  const acceptExternalSnapshot = (nextContent: string) => {
-    setFileContent(nextContent);
-    setEditorContent(nextContent);
-    setRevision((current) => current + 1);
-  };
+  const mentionUsers = users.some((user) => user.id === demoUser.id) ? users : [demoUser, ...users];
 
   const handleFixtureChange = (nextFixtureId: string) => {
     const nextFixture = fixtureOptions.find((candidate) => candidate.id === nextFixtureId);
     if (!nextFixture) return;
 
     setFixtureId(nextFixture.id);
-    acceptExternalSnapshot(nextFixture.markdown);
+    setContent(nextFixture.markdown);
 
     setLastHostEvent(null);
     setHostEventVisible(false);
-  };
-
-  const handleEditorContentChanged = (
-    nextContent: string,
-    _document: Document,
-    patch: DocumintPatch | null,
-  ) => {
-    if (patch) {
-      setFileContent((previousContent) => applyDocumintPatch(previousContent, patch));
-      setRevision((current) => current + 1);
-      return;
-    }
-
-    acceptExternalSnapshot(nextContent);
   };
 
   const showHostEvent = (event: PlaygroundHostEvent) => {
@@ -218,6 +215,8 @@ export function Playground() {
           </label>
 
           <ThemePopover
+            fontSize={fontSize}
+            onFontSizeChange={setFontSize}
             onOpenChange={setThemePopoverOpen}
             onThemeIdChange={setThemeId}
             open={themePopoverOpen}
@@ -250,14 +249,19 @@ export function Playground() {
 
           <UsersPopover
             key={`${fixtureId}-users`}
-            content={fileContent}
+            content={content}
             onUsersChange={setUsers}
             onPresenceChange={setPresence}
           />
 
           {/* Live input-event log; gated so it ships with `bun run dev`
               but not with the deployable demo (`bun run build:playground`). */}
-          {process.env.NODE_ENV !== "production" ? <DiagnosticsPopover /> : null}
+          {process.env.NODE_ENV !== "production" ? (
+            <DiagnosticsPopover
+              frameDebugEnabled={frameDebugEnabled}
+              onFrameDebugEnabledChange={setFrameDebugEnabled}
+            />
+          ) : null}
         </div>
       </header>
 
@@ -273,11 +277,10 @@ export function Playground() {
           <div className={fixtureSurfaceClassName}>
             <Documint
               commentTrigger={commentTrigger}
-              content={editorContent}
+              content={content}
               leafPlacement={leafPlacement}
-              revision={String(revision)}
               sideColumn={playgroundSideColumn}
-              theme={activeTheme ?? undefined}
+              theme={documintTheme}
               users={mentionUsers}
               presence={presence}
               protocols={protocols}
@@ -286,7 +289,7 @@ export function Playground() {
               actions={actions}
               decorations={decorations}
               onCommentChanged={handleCommentChanged}
-              onContentChanged={handleEditorContentChanged}
+              onContentChanged={setContent}
               onResourceOpened={(resource) => {
                 if (resource.protocol === "playground:" && resource.url === "playground:/theme") {
                   setThemePopoverOpen(true);
@@ -306,13 +309,16 @@ export function Playground() {
             <textarea
               aria-label="Markdown source"
               className="font-code h-full min-h-full w-full resize-y rounded-none border-0 bg-background/90 p-4 text-[0.95rem] leading-[1.55]"
-              onChange={(event) => acceptExternalSnapshot(event.target.value)}
+              onChange={(event) => setContent(event.target.value)}
               spellCheck={false}
-              value={fileContent}
+              value={content}
             />
           </div>
         </div>
       </section>
+      {process.env.NODE_ENV !== "production" ? (
+        <FrameDebugOverlay enabled={frameDebugEnabled} />
+      ) : null}
     </main>
   );
 }

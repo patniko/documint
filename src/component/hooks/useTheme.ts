@@ -14,11 +14,15 @@ type InputDocumintThemePair = {
 };
 
 export function useTheme(theme: DocumintTheme | undefined) {
+  /* Theme resolution */
+
   const themePair = useMemo(() => resolveThemePair(theme), [theme]);
   const [preferredTheme, setPreferredTheme] = useState<ResolvedEditorTheme>(() =>
     resolvePreferredTheme(themePair),
   );
   const themeStyles = useMemo(() => createThemeStyles(preferredTheme), [preferredTheme]);
+
+  /* System color-scheme subscription */
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -42,6 +46,8 @@ export function useTheme(theme: DocumintTheme | undefined) {
       mediaQuery.removeListener(updateTheme);
     };
   }, [themePair]);
+
+  /* Public API */
 
   return {
     theme: preferredTheme,
@@ -95,8 +101,6 @@ function createThemeStyles(theme: ResolvedEditorTheme): CSSProperties {
     "--documint-leaf-font-family": '"Avenir Next", "Segoe UI", sans-serif',
     "--documint-leaf-shadow": theme.leafShadow,
     "--documint-leaf-secondary-text": theme.leafSecondaryText,
-    "--documint-leaf-resolved-bg": theme.leafResolvedBackground,
-    "--documint-leaf-resolved-border": theme.leafResolvedBorder,
     "--documint-leaf-text": theme.leafText,
     "--documint-mention-bg": theme.mentionBackground,
     "--documint-mention-text": theme.mentionText,

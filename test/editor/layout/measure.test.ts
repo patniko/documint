@@ -9,11 +9,71 @@ import {
 } from "@/editor/state";
 import { spliceText } from "@/editor/state/reducer/text";
 import { measureCaretTarget } from "@/editor/layout";
+import { resolveDocumentLayoutOptions } from "@/editor/layout/lib/options";
 import { measureLayoutSlice } from "@/editor/layout/measure";
 import { parseDocument } from "@/markdown";
 import { fixtureOptions } from "../../../playground/src/lib/data";
 import type { DocumentResources } from "@/types";
 import { getRegion, setup } from "../helpers";
+
+test("derives estimated character width from fontSize unless explicitly pinned", () => {
+  const scaled = resolveDocumentLayoutOptions({ width: 400, fontSize: 20 });
+  const pinned = resolveDocumentLayoutOptions({ width: 400, fontSize: 20, charWidth: 9 });
+
+  expect(scaled.charWidth).toBe(11);
+  expect(scaled.lineHeight).toBe(30);
+  expect(pinned.charWidth).toBe(9);
+});
+
+test("paragraph honors explicit lineHeight while heading and code derive from fontSize", () => {
+  // Embedders can pin paragraph spacing without forcing heading/code blocks
+  // to inherit the same value: paragraphs use options.lineHeight as their
+  // fallback, while heading and code typography derive purely from fontSize.
+  // This test locks that asymmetry so a future "make headings inherit the
+  // override" change doesn't sneak through.
+  const runtime = createDocumentIndex(
+    parseDocument("# Heading\n\nParagraph text\n\n```\ncode\n```\n"),
+  );
+  const layout = measureLayoutSlice(runtime, { width: 4000, fontSize: 16, lineHeight: 40 });
+  const heading = layout.lines.find((line) => line.text === "Heading");
+  const paragraph = layout.lines.find((line) => line.text === "Paragraph text");
+  const code = layout.lines.find((line) => line.text === "code");
+
+  if (!heading || !paragraph || !code) {
+    throw new Error("Expected heading, paragraph, and code lines");
+  }
+
+  // Paragraph: uses the explicit override.
+  expect(paragraph.height).toBe(40);
+  // Heading: round(16 * 2.25) = 36, derived from fontSize only.
+  expect(heading.height).toBe(36);
+  // Code: round(15 * 22/15) = 22, derived from fontSize only.
+  expect(code.height).toBe(22);
+});
+
+test("scales heading and paragraph line heights proportionally with fontSize", () => {
+  // Picking a non-default fontSize must scale the entire typography hierarchy:
+  // paragraphs use `fontSize * 1.5` (the resolver's derived lineHeight), and
+  // heading line heights scale from the at-base-16 reference table.
+  const runtime = createDocumentIndex(parseDocument("# Heading\n\nParagraph text\n"));
+  const baseLayout = measureLayoutSlice(runtime, { width: 4000, fontSize: 16 });
+  const scaledLayout = measureLayoutSlice(runtime, { width: 4000, fontSize: 14 });
+  const baseHeading = baseLayout.lines.find((line) => line.text === "Heading");
+  const scaledHeading = scaledLayout.lines.find((line) => line.text === "Heading");
+  const baseParagraph = baseLayout.lines.find((line) => line.text === "Paragraph text");
+  const scaledParagraph = scaledLayout.lines.find((line) => line.text === "Paragraph text");
+
+  if (!baseHeading || !scaledHeading || !baseParagraph || !scaledParagraph) {
+    throw new Error("Expected heading and paragraph lines");
+  }
+
+  // H1 lineHeightRatio = 2.25: round(16 * 2.25) = 36, round(14 * 2.25) = 32.
+  expect(baseHeading.height).toBe(36);
+  expect(scaledHeading.height).toBe(32);
+  // Paragraph derives lineHeight at the default 1.5× ratio: 24, 21.
+  expect(baseParagraph.height).toBe(24);
+  expect(scaledParagraph.height).toBe(21);
+});
 
 test("wraps runtime text into deterministic canvas layout lines", () => {
   const runtime = createDocumentIndex(
@@ -65,6 +125,37 @@ test("materializes a trailing empty line when the region ends on a soft break", 
   expect(containerLines.length).toBe(2);
   expect(containerLines[0]?.text).toBe("foo");
   expect(containerLines[1]?.text).toBe("");
+});
+
+test("uses compact gaps between tight list items", () => {
+  const runtime = createDocumentIndex(parseDocument("- alpha\n- beta\n"));
+  const layout = measureLayoutSlice(runtime, { width: 4000 });
+  const alphaLine = layout.lines.find((line) => line.text === "alpha");
+  const betaLine = layout.lines.find((line) => line.text === "beta");
+
+  if (!alphaLine || !betaLine) {
+    throw new Error("Expected tight list lines");
+  }
+
+  const gap = betaLine.top - (alphaLine.top + alphaLine.height);
+
+  expect(gap).toBe(6);
+  expect(gap).toBeLessThan(layout.options.blockGap);
+});
+
+test("uses regular block gaps between loose list items", () => {
+  const runtime = createDocumentIndex(parseDocument("- alpha\n\n- beta\n"));
+  const layout = measureLayoutSlice(runtime, { width: 4000 });
+  const alphaLine = layout.lines.find((line) => line.text === "alpha");
+  const betaLine = layout.lines.find((line) => line.text === "beta");
+
+  if (!alphaLine || !betaLine) {
+    throw new Error("Expected loose list lines");
+  }
+
+  const gap = betaLine.top - (alphaLine.top + alphaLine.height);
+
+  expect(gap).toBe(layout.options.blockGap);
 });
 
 test("lays out table cells side by side within the same row", () => {
@@ -345,6 +436,14 @@ test("treats user mentions as single caret boundary units", () => {
   expect(beforeMention).toBeDefined();
   expect(afterMention).toBeDefined();
   expect(afterMention!.left - beforeMention!.left).toBeGreaterThan(60);
+  expect(line.inlineReferences).toEqual([
+    {
+      end: 4,
+      kind: "mention",
+      start: 3,
+      width: afterMention!.left - beforeMention!.left,
+    },
+  ]);
 });
 
 test("measures registered resources as single pill units", () => {
@@ -383,6 +482,20 @@ test("measures registered resources as single pill units", () => {
   expect(afterResource).toBeDefined();
   expect(afterResource!.left - beforeResource!.left).toBeGreaterThan(80);
   expect(afterResource!.left - beforeResource!.left).toBeLessThan(130);
+  const resourceReference = line.inlineReferences?.[0];
+
+  if (resourceReference?.kind !== "resource") {
+    throw new Error("Expected resource inline reference metric");
+  }
+
+  expect(line.inlineReferences).toHaveLength(1);
+  expect(resourceReference).toMatchObject({
+    end: 6,
+    kind: "resource",
+    start: 5,
+    width: afterResource!.left - beforeResource!.left,
+  });
+  expect(resourceReference.iconSegmentWidth).toBeGreaterThan(0);
 });
 
 test("recomputes cached resource measurements when protocol icons change", () => {
@@ -508,4 +621,12 @@ test("uses authored image width when laying out image runs", () => {
 
   expect(layout.lines[0]?.width).toBe(120);
   expect(layout.lines[0]?.height).toBe(68);
+  expect(layout.lines[0]?.inlineReferences).toEqual([
+    {
+      end: 1,
+      kind: "image",
+      start: 0,
+      width: 120,
+    },
+  ]);
 });

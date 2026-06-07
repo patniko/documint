@@ -2,6 +2,8 @@
  * Public React host for the canvas editor. The component owns content-format
  * bridging, DOM lifecycle, viewport coordination, and hidden-input plumbing.
  */
+// oxlint-disable-next-line typescript/triple-slash-reference
+/// <reference path="./style-imports.d.ts" />
 import {
   useCallback,
   useEffect,
@@ -9,6 +11,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  type HTMLAttributes,
   type UIEvent,
 } from "react";
 import {
@@ -27,7 +30,9 @@ import {
   deleteThread,
   editComment,
   getDocument,
-  hasContentAnimationsInViewport,
+  hasActiveCommentHighlightsInViewport,
+  hasActiveResourcesInViewport,
+  hasAnimatedDecorationsInViewport,
   insertTableColumn,
   insertTableRow,
   measureVisualCaretTarget,
@@ -38,7 +43,12 @@ import {
   updateLink,
   type EditorPresence,
 } from "@/editor";
-import { paintContent, paintOverlay } from "@/renderer";
+import {
+  createDocumentFrame,
+  createOverlayFrame,
+  paintDocumentFrame,
+  paintOverlayFrame,
+} from "@/renderer";
 import type { LucideIcon } from "lucide-react";
 import type {
   DocumentPresence,
@@ -47,7 +57,6 @@ import type {
   DocumintStorage,
   EditorTheme,
 } from "@/types";
-import { PresenceOverlay } from "./overlays/PresenceOverlay";
 import { parseDocument, type MarkdownOptions } from "@/markdown";
 import { OverlayPortalProvider } from "./overlays/OverlayPortal";
 import { AnnotationLeaf } from "./overlays/leaves/AnnotationLeaf";
@@ -55,17 +64,16 @@ import { CompletionLeaf } from "./overlays/leaves/CompletionLeaf";
 import type { CompletionSource } from "./completions/completions";
 import { createMentionCompletionSource, emojiCompletionSource } from "./completions/sources";
 import { InsertionLeaf } from "./overlays/leaves/InsertionLeaf";
-import { DocumentLeafAnchor } from "./overlays/leaves/core/DocumentLeafAnchor";
 import { resolveDocumentLeafResolution } from "./overlays/leaves/core/placement";
-import { OverlayLeaf } from "./overlays/leaves/core/OverlayLeaf";
-import type { DocumentLeafResolution } from "./overlays/leaves/core/shared";
+import { DocumentAnchor } from "./overlays/anchors/DocumentAnchor";
+import { ViewportAnchor } from "./overlays/anchors/ViewportAnchor";
+import type { DocumentAnchorResolution } from "./overlays/leaves/core/shared";
 import { LinkLeaf } from "./overlays/leaves/LinkLeaf";
 import { SearchLeaf } from "./overlays/leaves/SearchLeaf";
 import { TableLeaf } from "./overlays/leaves/TableLeaf";
 import { useIdle } from "./hooks/useIdle";
 import { useCursor } from "./hooks/useCursor";
 import { useDocumentCompletions } from "./completions/useDocumentCompletions";
-import { useImageHandles } from "./hooks/useImageHandles";
 import { useImages } from "./hooks/useImages";
 import { usePointer } from "./hooks/usePointer";
 import { usePresence } from "./hooks/usePresence";
@@ -78,18 +86,17 @@ import {
   type ResourceProtocolRecord,
 } from "./hooks/useResources";
 import { useInput } from "./hooks/useInput";
-import { useRenderScheduler } from "./hooks/useRenderScheduler";
+import { useRender } from "./hooks/useRender";
 import { useSelection } from "./hooks/useSelection";
 import { useSearch } from "./hooks/useSearch";
 import { useTheme } from "./hooks/useTheme";
 import { useViewport } from "./hooks/useViewport";
 import { prepareCanvasLayer } from "./lib/canvas";
-import { emitDiagnostic } from "./lib/diagnostics";
+import { emitDiagnostic, emitRenderFrame } from "./lib/diagnostics";
 import { type EditorInputKeybinding } from "./lib/keybindings";
 import { extractMentionedUserIds } from "./lib/mentions";
 import type { DocumintLeafPlacement, DocumintSideColumnOptions } from "./lib/side-column";
 import { DocumentStorage } from "./lib/storage";
-import { type DocumintPatch } from "@/sync/content-patch";
 import { useDecorations, type DocumintDecoration } from "./hooks/useDecorations";
 import { useSync, type UserMentionEvent } from "./hooks/useSync";
 import { defaultCommentTrigger, type CommentTrigger } from "./comment-trigger";
@@ -107,22 +114,32 @@ import {
   useEditorCommand,
   useSprig,
 } from "./store";
-import { DOCUMINT_EDITOR_STYLES } from "./styles";
+import editorCss from "./styles.css" with { type: "text" };
 
 export type { DocumintDecoration } from "./hooks/useDecorations";
 export type { ActiveResourceSet, ResourceProtocolRecord } from "./hooks/useResources";
 export type { UserMentionEvent } from "./hooks/useSync";
 export type { CommentTrigger } from "./comment-trigger";
 export type { DocumintLeafPlacement, DocumintSideColumnOptions } from "./lib/side-column";
-export type { DocumintPatch, DocumintPatchChange } from "@/sync/content-patch";
-export { applyDocumintPatch } from "@/sync/content-patch";
+
+export type ResizeHandle = {
+  end: {
+    left: number;
+    props: HTMLAttributes<HTMLDivElement>;
+    top: number;
+  };
+  start: {
+    left: number;
+    props: HTMLAttributes<HTMLDivElement>;
+    top: number;
+  };
+};
 
 const SIDE_COLUMN_HOVER_HIDE_DELAY_MS = 350;
 
 export type DocumintProps = {
   content: string;
   className?: string;
-  revision?: string | null;
 
   actions?: DocumintActions;
   theme?: DocumintTheme;
@@ -137,9 +154,7 @@ export type DocumintProps = {
   leafPlacement?: DocumintLeafPlacement;
   sideColumn?: DocumintSideColumnOptions;
 
-  // When `revision` is provided, `patch` is emitted for patchable edits and
-  // `content` is only the snapshot fallback when `patch` is null.
-  onContentChanged?: (content: string, document: Document, patch: DocumintPatch | null) => void;
+  onContentChanged?: (content: string) => void;
   onCommentChanged?: (change: CommentChange) => void;
   onResourceOpened?: (resource: DocumentResourceReference) => void;
   onResourcesRequested?: (resources: readonly DocumentResourceReference[]) => void;
@@ -231,7 +246,6 @@ function DocumintHost({
   onUserMentioned,
   presence,
   resources,
-  revision,
   sideColumn,
   storage,
   theme,
@@ -253,12 +267,15 @@ function DocumintHost({
   const { theme: preferredTheme, themeStyles } = useTheme(theme);
 
   const documentStorage = useMemo(() => new DocumentStorage(storage, window), [storage]);
-  const { hasLoadingImages, images, persistImage } = useImages(documentStorage);
   const resourceRegistry = useResources({
     onResourcesRequested,
     resourceProtocols,
     resources,
   });
+  const { hasLoadingImages, imageHandle, images, persistImage } = useImages(
+    documentStorage,
+    resourceRegistry,
+  );
   const activeResourceKey = useMemo(
     () => createActiveResourceKey(resourceRegistry.active),
     [resourceRegistry.active],
@@ -297,10 +314,10 @@ function DocumintHost({
     commitLayout,
     getScrollTop,
     invalidateLayout,
-    observeScrollContainer,
     reconcileEditorState,
     resolvePoint,
     scrollTo,
+    syncScrollContainer,
   } = viewportActions;
 
   const {
@@ -316,6 +333,7 @@ function DocumintHost({
   const selectionContext = useSprig(selectionContextSprig);
   const commentRanges = useSprig(commentRangesSprig);
   const normalizedSel = useSprig(normalizedSelectionSprig);
+
   const isEditable = Boolean(onContentChanged);
   // Completion sources are pure derivations of the host-provided `users`
   // prop — no reactive editor input — so they live as a hook-local memo
@@ -331,10 +349,10 @@ function DocumintHost({
   const { emitContentChanged, emitUserMentioned } = useSync({
     content,
     contentDocument,
+    markdownOptions,
     onContentChanged,
     onUserMentioned,
     resourceProtocolKey: resourceProtocols.key,
-    revision,
     store,
   });
   const documentCompletions = useDocumentCompletions({
@@ -452,9 +470,7 @@ function DocumintHost({
   };
 
   const idle = useIdle({
-    onIdle: () => {
-      scheduleContentPaint();
-    },
+    onIdle: () => scheduleContentPaint(),
   });
 
   /* Paint callbacks */
@@ -488,7 +504,7 @@ function DocumintHost({
 
     const now = performance.now();
 
-    paintContent(editorState, layoutState, context, {
+    const frame = createDocumentFrame(editorState, layoutState, {
       activeBlockId: selectionContext.block?.blockId ?? null,
       activeRegionId: editorState.selection.focus.regionId,
       activeThreadIndex: hoveredCommentThreadIndex ?? activeCommentIndex,
@@ -504,6 +520,14 @@ function DocumintHost({
       theme: preferredTheme,
       width,
     });
+
+    paintDocumentFrame(context, frame);
+    if (process.env.NODE_ENV !== "production" && contentCanvasRef.current) {
+      emitRenderFrame({
+        canvas: contentCanvasRef.current,
+        frame,
+      });
+    }
   });
 
   const renderOverlay = useEffectEvent((layoutState = layout.peekLatest()) => {
@@ -523,7 +547,7 @@ function DocumintHost({
 
     const { context, devicePixelRatio, height, width } = preparedLayer;
 
-    paintOverlay(editorState, layoutState, context, {
+    const frame = createOverlayFrame(editorState, layoutState, {
       devicePixelRatio,
       height,
       normalizedSelection: normalizedSel,
@@ -535,17 +559,23 @@ function DocumintHost({
       theme: preferredTheme,
       width,
     });
+    paintOverlayFrame(context, frame);
   });
 
   const renderViewport = useEffectEvent(() => {
     const layoutState = commitLayout();
+
     renderContent(layoutState);
     renderOverlay(layoutState);
   });
 
   const { scheduleContentPaint, scheduleFullPaint, scheduleFullRender, scheduleOverlayPaint } =
-    useRenderScheduler({
-      hasRunningOptionalContentAnimations: () => {
+    useRender({
+      isActive: idle.isActive,
+      renderContent,
+      renderOverlay,
+      renderViewport,
+      hasAmbientAnimationsInViewport: () => {
         // Loading-image shimmer is content-only: keep the shared scheduler
         // ticking, but let resource changes below own layout invalidation.
         if (hasLoadingImages) {
@@ -557,19 +587,12 @@ function DocumintHost({
           return false;
         }
 
-        return hasContentAnimationsInViewport({
-          commentPresence,
-          commentRanges,
-          resourceRegistry,
-          state: editorState,
-          textDecorations,
-          viewport: layoutState,
-        });
+        return (
+          hasActiveResourcesInViewport(editorState, layoutState, resourceRegistry) ||
+          hasAnimatedDecorationsInViewport(editorState, layoutState, textDecorations) ||
+          hasActiveCommentHighlightsInViewport(layoutState, commentRanges, commentPresence)
+        );
       },
-      isActive: idle.isActive,
-      renderContent,
-      renderOverlay,
-      renderViewport,
     });
 
   // Late-bind the scheduler for `useViewport`'s scroll-settle callback. The
@@ -584,9 +607,10 @@ function DocumintHost({
   // or programmatically (e.g. offscreen presence navigation). Stable identity
   // via `useEffectEvent` so the listener doesn't re-attach on every render.
   const handleViewportScroll = useEffectEvent((scrollContainer: HTMLDivElement) => {
-    observeScrollContainer(scrollContainer);
+    syncScrollContainer(scrollContainer);
     scheduleFullRender();
   });
+
   const handleScrollEvent = useEffectEvent((event: UIEvent<HTMLDivElement>) => {
     handleViewportScroll(event.currentTarget);
   });
@@ -600,8 +624,6 @@ function DocumintHost({
     viewportWidth,
     viewportHeight,
   });
-
-  const imageHandle = useImageHandles(renderResources);
 
   const input = useInput({
     enableTouchKeyDown: documentCompletions.leaf !== null || search.leaf !== null,
@@ -653,7 +675,7 @@ function DocumintHost({
 
     // Comment-attached presence: move the local caret to the thread anchor
     // (which also activates the thread) and let `useCursor`'s focus-
-    // visibility scroll the comment into view via `cursorScrollTargetSprig`.
+    // visibility scroll the comment into view.
     // No explicit `scrollTop` set here — the selection move is the single
     // source of intent, and the scroll falls out of it.
     if (target.commentThreadIndex != null) {
@@ -728,15 +750,6 @@ function DocumintHost({
     viewportHeight,
   ]);
 
-  useEffect(() => {
-    if (activeResourceKey === lastPaintedActiveResourceKeyRef.current) {
-      return;
-    }
-
-    lastPaintedActiveResourceKeyRef.current = activeResourceKey;
-    scheduleContentPaint();
-  }, [activeResourceKey]);
-
   // Selection changes — caret moves on overlay, range highlight on content.
   //
   // Future: the selection range highlight (and comment-highlight markers
@@ -777,6 +790,15 @@ function DocumintHost({
     scheduleOverlayPaint();
   }, [resolvedPresence]);
 
+  useEffect(() => {
+    if (activeResourceKey === lastPaintedActiveResourceKeyRef.current) {
+      return;
+    }
+
+    lastPaintedActiveResourceKeyRef.current = activeResourceKey;
+    scheduleContentPaint();
+  }, [activeResourceKey]);
+
   /* Leaf presentation */
 
   // Search is fixed editor chrome. The remaining leaves are contextual
@@ -793,10 +815,10 @@ function DocumintHost({
       : undefined;
 
   // Resolve the active leaf's anchor target into pixel geometry against
-  // the prepared layout. Inline leaves keep the existing visible-window
-  // gate; side-column leaves stay resolvable so the anchor shell can clamp
-  // them inside the rail.
-  const resolveDocumentLeafAnchor = (): DocumentLeafResolution | null => {
+  // the prepared layout. Inline leaves keep the visible-window gate; side-
+  // column leaves stay resolvable so the anchor shell can clamp them inside
+  // the rail.
+  const resolveDocumentAnchor = (): DocumentAnchorResolution | null => {
     if (!activeDocumentLeaf) {
       return null;
     }
@@ -833,7 +855,7 @@ function DocumintHost({
       placement: activeDocumentLeafPlacement,
     });
   };
-  const documentLeafAnchor = resolveDocumentLeafAnchor();
+  const documentAnchor = resolveDocumentAnchor();
 
   const resolveDocumentLeafContent = () => {
     if (!activeDocumentLeaf) {
@@ -896,6 +918,7 @@ function DocumintHost({
             canEdit={isEditable}
             formatting={activeDocumentLeaf.formatting}
             link={null}
+            markdownOptions={markdownOptions}
             mode="create"
             completionSources={completionSources}
             onCreateThread={(body) => {
@@ -978,7 +1001,7 @@ function DocumintHost({
   // Each branch of `resolveDocumentLeafContent` allocates several inline
   // callbacks, so this avoids per-frame churn during scrolls that move the
   // cursor leaf's anchor in and out of the viewport.
-  const documentLeafContent = documentLeafAnchor ? resolveDocumentLeafContent() : null;
+  const documentLeafContent = documentAnchor ? resolveDocumentLeafContent() : null;
 
   /* Render */
 
@@ -990,7 +1013,7 @@ function DocumintHost({
         className={sectionClassName}
         style={{ ...themeStyles, height: "100%", minHeight: 0 }}
       >
-        <style>{DOCUMINT_EDITOR_STYLES}</style>
+        <style>{editorCss}</style>
         <div
           ref={scrollContainerRef}
           onScroll={handleScrollEvent}
@@ -1021,18 +1044,15 @@ function DocumintHost({
             wrap="off"
           />
 
-          <div
-            className="documint-fixed-overlay-layer"
-            style={{
-              paddingRight: `${preferredTheme.paddingX}px`,
-              top: `${preferredTheme.paddingY}px`,
-            }}
+          <ViewportAnchor
+            open={search.leaf !== null}
+            presence={resolvedPresence}
+            onPresenceSelect={scrollToPresence}
+            paddingX={preferredTheme.paddingX}
+            paddingY={preferredTheme.paddingY}
           >
-            <OverlayLeaf open={search.leaf !== null}>
-              {search.leaf ? <SearchLeaf {...search.leaf} /> : null}
-            </OverlayLeaf>
-            <PresenceOverlay onSelect={scrollToPresence} presence={resolvedPresence} />
-          </div>
+            {search.leaf ? <SearchLeaf {...search.leaf} /> : null}
+          </ViewportAnchor>
 
           {/* Scroll content wrapper (this forces a virtualized scroll height for the document, that is only partially rendered) */}
           <div {...viewportProps.scrollContent} className="documint-scroll-content">
@@ -1098,10 +1118,8 @@ function DocumintHost({
             )}
 
             {/* Leaf overlay */}
-            {documentLeafAnchor ? (
-              <DocumentLeafAnchor anchor={documentLeafAnchor}>
-                {documentLeafContent}
-              </DocumentLeafAnchor>
+            {documentAnchor ? (
+              <DocumentAnchor anchor={documentAnchor}>{documentLeafContent}</DocumentAnchor>
             ) : null}
           </div>
         </div>

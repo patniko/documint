@@ -1,10 +1,10 @@
-// Tests for the overlay-canvas caret painter. These exercise `paintOverlay`
-// — the public overlay entry — since presence carets only ever land on the
-// overlay layer.
+// Tests for the overlay-canvas caret painter. These exercise
+// `createOverlayFrame` + `paintOverlayFrame` since presence carets only ever
+// land on the overlay layer.
 
 import { expect, test } from "bun:test";
 import type { EditorPresence } from "@/editor/anchors";
-import { paintOverlay } from "@/renderer";
+import { createOverlayFrame, paintOverlayFrame } from "@/renderer";
 import { createEditorLayoutState } from "@/editor/layout";
 import { normalizeSelection, setSelection, type EditorState } from "@/editor/state";
 import { lightTheme, resolveEditorTheme } from "@/component/lib/themes";
@@ -40,6 +40,7 @@ test("paints resolved presence cursors on the overlay canvas", () => {
           offset: 5,
         },
         id: "user",
+        isOnUnresolvedCommentThread: false,
         username: "User",
         viewport: null,
       },
@@ -70,6 +71,7 @@ test("skips unresolved presence cursors during overlay paint", () => {
         commentThreadIndex: null,
         cursorPoint: null,
         id: "user",
+        isOnUnresolvedCommentThread: false,
         username: "User",
         viewport: null,
       },
@@ -98,7 +100,7 @@ function renderOverlayOperations(
   });
   const context = new RecordingCanvasContext();
 
-  paintOverlay(state, layoutState, context as unknown as CanvasRenderingContext2D, {
+  const frame = createOverlayFrame(state, layoutState, {
     devicePixelRatio: 1,
     height: options.height,
     normalizedSelection: normalizeSelection(state),
@@ -107,6 +109,7 @@ function renderOverlayOperations(
     theme: resolvedLightTheme,
     width: options.width,
   });
+  paintOverlayFrame(context as unknown as CanvasRenderingContext2D, frame);
 
   return {
     context,

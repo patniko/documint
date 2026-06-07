@@ -5,7 +5,7 @@ import type { Block } from "@/document";
 import { emptyDocumentResources } from "@/editor/resources";
 import type { DocumentResources } from "@/types";
 import { isContainerBlock, isInertBlock, resolveRegion } from "../../state/index/query";
-import type { DocumentIndex, EditableRegion } from "../../state";
+import { resolveIndexedBlock, type DocumentIndex, type EditableRegion } from "../../state";
 import { createLayoutCache, type LayoutCache } from "../state/cache";
 import { CODE_BLOCK_BACKGROUND_PADDING_Y } from "../lib/code-block";
 import {
@@ -20,15 +20,16 @@ import { layoutTable } from "./table";
 import {
   measureTextContainerLines,
   measureTextLineBoundaries,
-  resolveTextBlockFont,
-  resolveTextBlockLineHeight,
+  resolveBlockTypography,
   type TextLineBoundary,
+  type TextInlineReference,
 } from "./text";
 
 export type { DocumentLayoutOptions } from "../lib/options";
 export type { LayoutBlockExtent } from "../lib/marker-metrics";
 
 export type LineBoundary = TextLineBoundary;
+export type LayoutInlineReference = TextInlineReference;
 
 export type LayoutLine = {
   // Identity: connects this visual row back to indexed editor content.
@@ -42,10 +43,19 @@ export type LayoutLine = {
   left: number;
   width: number;
   height: number;
+  contentInset: number;
   // Rendering and caret data.
   text: string;
   font: string;
   boundaries: LineBoundary[];
+  inlineReferences: LayoutInlineReference[] | null;
+};
+
+export type LayoutRect = {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
 };
 
 export type LayoutBlock = {
@@ -71,10 +81,6 @@ export function measureLayoutSlice(
   options: PartialDocumentLayoutOptions,
   cache = createLayoutCache(),
   resources: DocumentResources | null = null,
-  // The block map is a pure projection of `documentIndex.document.blocks`,
-  // so callers that already built one (`createEditorLayoutState`, the
-  // virtualizer) thread it in to avoid rebuilding it per slice.
-  precomputedBlockMap?: Map<string, Block>,
   // Seed for the running Y cursor. Defaults to `options.paddingY` (slice-
   // local coordinates). The virtualizer passes the document-space top of
   // the slice so geometry emerges directly in document space and no
@@ -88,9 +94,9 @@ export function measureLayoutSlice(
     string,
     { bottom: number; left: number; right: number; top: number }
   >();
-  const runtimeBlocks = documentIndex.blockIndex;
-  const blockMap = precomputedBlockMap ?? buildDocumentBlockMap(documentIndex.document.blocks);
+  const blockIndex = documentIndex.blockIndex;
   const blockExtents = new Map<string, LayoutBlockExtent>();
+  const layoutBlocks = resolveLayoutBlockScope(documentIndex);
 
   // Layout walks blocks (not regions) so inert leaves — those without
   // any region — get a positioned geometry slot in document order. Text
@@ -106,9 +112,9 @@ export function measureLayoutSlice(
   // step can read its `type` without re-querying `blockIndex.get`.
   let previousLaidOutBlock: DocumentIndex["blocks"][number] | null = null;
 
-  for (const indexedBlock of documentIndex.blocks) {
-    const block = blockMap.get(indexedBlock.block.id) ?? null;
-    if (!block || isContainerBlock(indexedBlock)) continue;
+  for (const indexedBlock of layoutBlocks) {
+    const block = indexedBlock.block;
+    if (isContainerBlock(indexedBlock)) continue;
 
     const isInert = isInertBlock(indexedBlock);
     const blockRegionsInScope = indexedBlock.regionIds.filter((id) => visibleRegionIds.has(id));
@@ -122,8 +128,7 @@ export function measureLayoutSlice(
     // Apply the inter-block gap before laying out (except for the first).
     if (previousLaidOutBlock !== null) {
       y += resolveBlockGap(
-        runtimeBlocks,
-        blockMap,
+        blockIndex,
         previousLaidOutBlock.block.id,
         indexedBlock.block.id,
         resolvedOptions.blockGap,
@@ -188,6 +193,7 @@ export function measureLayoutSlice(
           contentLeft,
           y,
           availableWidth,
+          listInset,
           resolvedOptions,
           resolvedResources,
         );
@@ -203,9 +209,8 @@ export function measureLayoutSlice(
   // geometry; their leaf descendants do. Sorted by `top` to support
   // binary-search visibility scoping in the paint pass.
   const blocks: LayoutBlock[] = [];
-  for (const entry of documentIndex.blocks) {
-    const runtimeBlock = blockMap.get(entry.block.id);
-    if (!runtimeBlock || isContainerBlock(entry)) continue;
+  for (const entry of layoutBlocks) {
+    if (isContainerBlock(entry)) continue;
     const extent = blockExtents.get(entry.block.id);
     if (!extent) continue;
     blocks.push({
@@ -228,6 +233,29 @@ export function measureLayoutSlice(
   };
 }
 
+function resolveLayoutBlockScope(documentIndex: DocumentIndex) {
+  if (documentIndex.regions.length === documentIndex.regionIndex.size) {
+    return documentIndex.blocks;
+  }
+
+  if (documentIndex.regions.length === 0) {
+    return [];
+  }
+
+  let startIndex = documentIndex.blocks.length;
+  let endIndex = 0;
+
+  for (const region of documentIndex.regions) {
+    const indexedBlock = resolveIndexedBlock(documentIndex, region.block.id);
+    if (!indexedBlock) continue;
+
+    startIndex = Math.min(startIndex, indexedBlock.blockArrayIndex);
+    endIndex = Math.max(endIndex, indexedBlock.blockArrayIndex + 1);
+  }
+
+  return startIndex < endIndex ? documentIndex.blocks.slice(startIndex, endIndex) : [];
+}
+
 function layoutSingleContainer(
   lines: LayoutLine[],
   blockExtents: Map<string, LayoutBlockExtent>,
@@ -238,19 +266,18 @@ function layoutSingleContainer(
   left: number,
   top: number,
   availableWidth: number,
+  contentInset: number,
   options: DocumentLayoutOptions,
   resources: DocumentResources,
 ) {
-  const font = resolveTextBlockFont(block);
-  const lineHeight = resolveTextBlockLineHeight(block, options.lineHeight);
+  const typography = resolveBlockTypography(block, options.fontSize, options.lineHeight);
   const blockPaddingY = block?.type === "code" ? CODE_BLOCK_BACKGROUND_PADDING_Y : 0;
   const measuredLines = measureTextContainerLines(
     cache,
     container,
-    font,
     block,
     availableWidth,
-    lineHeight,
+    typography,
     resources,
   );
   let y = top + blockPaddingY;
@@ -264,16 +291,18 @@ function layoutSingleContainer(
       left,
       width: line.width,
       height: line.height,
+      contentInset,
       text: line.text,
-      font,
+      font: typography.font,
+      inlineReferences: line.inlineReferences,
       boundaries: measureTextLineBoundaries(
         cache,
         container,
         line.start,
         line.end,
         line.text,
-        font,
         availableWidth,
+        typography,
         resources,
       ),
     } satisfies LayoutLine;
@@ -286,7 +315,6 @@ function layoutSingleContainer(
 
   if (block?.type === "code") {
     const current = blockExtents.get(container.block.id);
-
     if (current) {
       blockExtents.set(container.block.id, {
         bottom: current.bottom + blockPaddingY,
@@ -359,24 +387,4 @@ export function updateBlockExtent(
     bottom: current ? Math.max(current.bottom, nextBottom) : nextBottom,
     top: current ? Math.min(current.top, line.top) : line.top,
   });
-}
-
-export function buildDocumentBlockMap(blocks: Block[]) {
-  const entries = new Map<string, Block>();
-
-  const visit = (candidateBlocks: Block[]) => {
-    for (const block of candidateBlocks) {
-      entries.set(block.id, block);
-
-      if (block.type === "blockquote" || block.type === "listItem") {
-        visit(block.children);
-      } else if (block.type === "list") {
-        visit(block.items);
-      }
-    }
-  };
-
-  visit(blocks);
-
-  return entries;
 }

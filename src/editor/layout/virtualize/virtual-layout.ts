@@ -2,9 +2,9 @@
 // The virtual layout mirrors exact block walking, but stores only estimated
 // region bounds and total document height.
 
-import type { Block } from "@/document";
 import type { DocumentResources } from "@/types";
-import { createResourceIconSignature, resolveResourceProtocol } from "@/resources";
+import { resolveResourceProtocol, type Block } from "@/document";
+import { createResourceIconSignature } from "@/editor/resources";
 import { isContainerBlock, isInertBlock } from "../../state/index/query";
 import type { DocumentIndex, EditableRegion } from "../../state";
 import {
@@ -27,8 +27,6 @@ import {
 export function getOrCreateVirtualLayout(
   cache: LayoutCache,
   documentIndex: DocumentIndex,
-  blockMap: Map<string, Block>,
-  runtimeBlocks: Map<string, DocumentIndex["blocks"][number]>,
   options: DocumentLayoutOptions,
   resources: DocumentResources,
 ) {
@@ -65,16 +63,15 @@ export function getOrCreateVirtualLayout(
   let previousLaidOutBlockId: string | null = null;
 
   for (const indexedBlock of documentIndex.blocks) {
-    const block = blockMap.get(indexedBlock.block.id) ?? null;
-    if (!block || isContainerBlock(indexedBlock)) continue;
+    const block = indexedBlock.block;
+    if (isContainerBlock(indexedBlock)) continue;
 
     const isInert = isInertBlock(indexedBlock);
     if (!isInert && indexedBlock.regionIds.length === 0) continue;
 
     if (previousLaidOutBlockId !== null) {
       totalHeight += resolveBlockGap(
-        runtimeBlocks,
-        blockMap,
+        documentIndex.blockIndex,
         previousLaidOutBlockId,
         indexedBlock.block.id,
         options.blockGap,
@@ -87,12 +84,12 @@ export function getOrCreateVirtualLayout(
       const result = appendTableEstimateEntries({
         block,
         cache,
+        indexedBlock,
         containerIndices,
         entries,
         index: regionCursor,
         options,
         resources,
-        runtimeBlocks,
         totalHeight,
         regions: documentIndex.regions,
       });
@@ -145,28 +142,27 @@ export function getOrCreateVirtualLayout(
 function appendTableEstimateEntries({
   block,
   cache,
+  indexedBlock,
   containerIndices,
   entries,
   index,
   options,
   resources,
-  runtimeBlocks,
   totalHeight,
   regions,
 }: {
   block: Extract<Block, { type: "table" }>;
   cache: LayoutCache;
+  indexedBlock: DocumentIndex["blocks"][number];
   containerIndices: Map<string, number>;
   entries: VirtualLayout["entries"];
   index: number;
   options: DocumentLayoutOptions;
   resources: DocumentResources;
-  runtimeBlocks: Map<string, DocumentIndex["blocks"][number]>;
   totalHeight: number;
   regions: DocumentIndex["regions"];
 }) {
-  const runtimeBlock = runtimeBlocks.get(block.id);
-  const tableRegionIds = runtimeBlock?.regionIds ?? [];
+  const tableRegionIds = indexedBlock.regionIds;
 
   if (tableRegionIds.length === 0) {
     return null;
@@ -178,13 +174,13 @@ function appendTableEstimateEntries({
     return null;
   }
 
-  const depth = runtimeBlock?.depth ?? 0;
+  const depth = indexedBlock.depth;
   const left = options.paddingX + depth * options.indentWidth;
   const tableWidth = Math.max(TABLE_MIN_WIDTH, options.width - left - options.paddingX);
   const columnCount = Math.max(1, ...block.rows.map((row) => row.cells.length));
   const columnWidth = tableWidth / columnCount;
   const cellWidth = Math.max(40, columnWidth - TABLE_CELL_PADDING_X * 2);
-  const lineHeight = resolveTextBlockLineHeight(block, options.lineHeight);
+  const lineHeight = resolveTextBlockLineHeight(block, options.lineHeight, options.fontSize);
   const rowCells = collectTableRowRegions(tableRegions, index);
   let nextTop = totalHeight;
 
@@ -287,11 +283,16 @@ function createVirtualLayoutCacheKey(
   options: DocumentLayoutOptions,
   resources: DocumentResources,
 ) {
+  // fontSize is keyed alongside lineHeight: an embedder that supplies an
+  // explicit lineHeight decouples the two, and a fontSize change there
+  // would otherwise reuse stale entries (heading sizes, code font, inline
+  // code metrics all shift with fontSize but not with lineHeight).
   return [
     options.width,
     options.paddingX,
     options.paddingY,
     options.indentWidth,
+    options.fontSize,
     options.lineHeight,
     options.blockGap,
     resolveImageResourceSignature(documentIndex, resources),

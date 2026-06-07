@@ -6,11 +6,7 @@ import {
   measureCanvasLineOffsetLeft,
   resolveBoundaryOffset,
 } from "../layout/query/line-lookup";
-import {
-  resolveLineContentInset,
-  resolveIndexedListItem,
-  resolveTaskCheckboxBounds,
-} from "../layout/query/line-visuals";
+import { resolveIndexedListItem, resolveTaskCheckboxBounds } from "../layout/query/line-visuals";
 import type { DocumentLayout, LayoutLine } from "../layout/measure";
 import {
   findAncestorIndexedBlock,
@@ -450,7 +446,7 @@ function resolveHitOnLine(state: EditorState, line: LayoutLine, x: number): Edit
     return null;
   }
 
-  const localX = Math.max(0, x - resolveLineContentInset(state, line) - line.left);
+  const localX = Math.max(0, x - line.contentInset - line.left);
   const offset = resolveBoundaryOffset(line.boundaries, localX);
   const resolvedOffset = Math.min(region.text.length, line.start + offset);
 

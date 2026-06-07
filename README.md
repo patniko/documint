@@ -24,13 +24,13 @@ A canvas-based, batteries-included markdown editor for React.
 
 ## Getting Started
 
-1. Install the package: `npm install documint` (or `bun add documint`)
-2. Import the `Documint` component from the package
-3. Pass your markdown content to it and listen for changes
+1. Install the package: `npm install @patniko/documint` (or `bun add @patniko/documint`)
+1. Import the `Documint` component from the package
+1. Pass your markdown content to it and listen for changes
 
 ```tsx
 import { useState } from "react";
-import { Documint } from "documint";
+import { Documint } from "@patniko/documint";
 
 const initialMarkdown = `# Hello Documint
 
@@ -44,13 +44,15 @@ export function App() {
 }
 ```
 
+`onContentChanged` emits the full next markdown snapshot. Hosts that need minimal text edits can diff their previous content against the snapshot inside their own text model.
+
 ## Custom Actions
 
 Use the `actions` prop to add custom buttons to contextual leaf menus. The first supported target is `selection`, which appears in the annotation toolbar when text is selected. Each action provides a Lucide icon name and receives the selected text when clicked.
 
 ```tsx
 import { useState } from "react";
-import { Documint } from "documint";
+import { Documint } from "@patniko/documint";
 
 export function App() {
   const [content, setContent] = useState("Select this text");
@@ -79,7 +81,7 @@ By default, comment threads open when users hover over commented text or place t
 
 ```tsx
 import { useState } from "react";
-import { Documint } from "documint";
+import { Documint } from "@patniko/documint";
 
 export function App() {
   const [content, setContent] = useState("Commented markdown");
@@ -94,7 +96,7 @@ Contextual leaves render inline by default. Set `leafPlacement="side-column"` to
 
 ```tsx
 import { useState } from "react";
-import { Documint } from "documint";
+import { Documint } from "@patniko/documint";
 
 export function App() {
   const [content, setContent] = useState("Commented markdown");
@@ -116,7 +118,7 @@ By default, Documint will detect the end-user's system theme and apply either th
 
 ```tsx
 import { useState } from "react";
-import { Documint, lightTheme } from "documint";
+import { Documint, lightTheme } from "@patniko/documint";
 
 const customTheme = {
   ...lightTheme,
@@ -138,7 +140,15 @@ If the document includes http-based images, then the editor will automatically l
 
 ```tsx
 import { useState } from "react";
-import { Documint, DocumintStorage } from "documint";
+import { Documint, DocumintStorage } from "@patniko/documint";
+
+const storage = createInMemoryStorage();
+
+export function App() {
+  const [content, setContent] = useState("# Documint with Custom Storage");
+
+  return <Documint content={content} onContentChanged={setContent} storage={storage} />;
+}
 
 function createInMemoryStorage(): DocumintStorage {
   const files = new Map<string, Blob>();
@@ -153,14 +163,6 @@ function createInMemoryStorage(): DocumintStorage {
     },
   };
 }
-
-const storage = createInMemoryStorage();
-
-export function App() {
-  const [content, setContent] = useState("# Documint with Custom Storage");
-
-  return <Documint content={content} onContentChanged={setContent} storage={storage} />;
-}
 ```
 
 ## Text Decorations
@@ -169,7 +171,7 @@ Use the `decorations` prop to style text that matches host-provided regular expr
 
 ```tsx
 import { useState } from "react";
-import { Documint, type DocumintDecoration } from "documint";
+import { Documint, type DocumintDecoration } from "@patniko/documint";
 
 const decorations: readonly DocumintDecoration[] = [
   { pattern: /\blist\b/gi, color: "red", backgroundColor: "rgba(255, 0, 0, 0.12)" },

@@ -4,7 +4,7 @@
 
 import type { PreparedTextWithSegments } from "@chenglou/pretext";
 import type { DocumentIndex } from "../../state";
-import type { LineBoundary } from "../measure";
+import type { LayoutInlineReference, LineBoundary } from "../measure";
 
 export type VirtualLayout = {
   containerIndices: Map<string, number>;
@@ -38,6 +38,7 @@ export type LayoutCache = {
     Array<{
       end: number;
       height: number;
+      inlineReferences: LayoutInlineReference[] | null;
       start: number;
       text: string;
       width: number;
@@ -79,6 +80,7 @@ export function cacheMeasuredLines(
   value: Array<{
     end: number;
     height: number;
+    inlineReferences: LayoutInlineReference[] | null;
     start: number;
     text: string;
     width: number;

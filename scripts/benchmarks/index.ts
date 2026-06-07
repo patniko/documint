@@ -67,6 +67,19 @@ const xlargeSnapshot = parseDocument(xlargeMarkdown);
 const hugeSnapshot = parseDocument(hugeMarkdown);
 
 const benchmarkRuns = runBenchmarkSuite();
+const duplicateBenchmarkNames = collectDuplicateBenchmarkNames(benchmarkRuns[0] ?? []);
+const unusedBudgetNames = collectUnusedBenchmarkBudgets(
+  manifest.benchmarks,
+  benchmarkRuns[0] ?? [],
+);
+
+if (duplicateBenchmarkNames.length > 0) {
+  throw new Error(`Duplicate benchmark names: ${duplicateBenchmarkNames.join(", ")}`);
+}
+
+if (unusedBudgetNames.length > 0) {
+  throw new Error(`Unused benchmark budgets: ${unusedBudgetNames.join(", ")}`);
+}
 
 const failures = collectRepeatedBudgetFailures(benchmarkRuns);
 
@@ -167,6 +180,33 @@ function groupBenchmarkRecordsByName(runs: BenchmarkRecord[][]) {
 
 function resolveBenchmarkBudget(records: BenchmarkRecord[]) {
   return records.find((record) => record.budgetMs !== undefined)?.budgetMs;
+}
+
+function collectDuplicateBenchmarkNames(records: BenchmarkRecord[]) {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+
+  for (const record of records) {
+    if (seen.has(record.name)) {
+      duplicates.add(record.name);
+    } else {
+      seen.add(record.name);
+    }
+  }
+
+  return [...duplicates].sort();
+}
+
+function collectUnusedBenchmarkBudgets(budgets: BenchmarkBudgetTree, records: BenchmarkRecord[]) {
+  const benchmarkNames = new Set(records.map((record) => record.name));
+
+  return collectBenchmarkBudgetNames(budgets)
+    .filter((name) => !benchmarkNames.has(name))
+    .sort();
+}
+
+function collectBenchmarkBudgetNames(budgets: BenchmarkBudgetTree) {
+  return Object.values(budgets).flatMap((group) => Object.keys(group));
 }
 
 async function readBenchmarkFixtureMarkdown(id: BenchmarkFixtureId) {

@@ -23,9 +23,7 @@ function createTableFixture(sectionCount: number): string {
     sections.push(
       `| Topic ${number}.a | Demo | Active | This row has a long note that should wrap across multiple visual lines to exercise per-row height variability. |`,
     );
-    sections.push(
-      `| Topic ${number}.b | Demo | Open | Shorter note. |`,
-    );
+    sections.push(`| Topic ${number}.b | Demo | Open | Shorter note. |`);
     sections.push(
       `| Topic ${number}.c | Demo | Done | Another note with moderate length to drive different row heights. |`,
     );
@@ -74,16 +72,22 @@ test("table-heavy virtualized totalHeight is independent of scroll-visit order",
   for (const top of forwardThenBackward) {
     createEditorLayoutState(stateA, { ...viewportOptions, top }, cacheA);
   }
-  const heightA = createEditorLayoutState(stateA, { ...viewportOptions, top: 0 }, cacheA)
-    .totalHeight;
+  const heightA = createEditorLayoutState(
+    stateA,
+    { ...viewportOptions, top: 0 },
+    cacheA,
+  ).totalHeight;
 
   const stateB = buildState();
   const cacheB = createLayoutCache();
   for (const top of backwardThenForward) {
     createEditorLayoutState(stateB, { ...viewportOptions, top }, cacheB);
   }
-  const heightB = createEditorLayoutState(stateB, { ...viewportOptions, top: 0 }, cacheB)
-    .totalHeight;
+  const heightB = createEditorLayoutState(
+    stateB,
+    { ...viewportOptions, top: 0 },
+    cacheB,
+  ).totalHeight;
 
   expect(heightA).toBe(heightB);
 });

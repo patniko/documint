@@ -21,10 +21,15 @@ import {
   type EditableRegion,
 } from "../../state";
 import { splitGraphemes } from "../../text/graphemes";
-import { codeTextFont, inlineTextHasCustomMetrics, resolveInlineTextStyle } from "../../text/fonts";
+import {
+  resolveCodeFont,
+  inlineTextHasCustomMetrics,
+  resolveInlineTextStyle,
+} from "../../text/fonts";
 import {
   resolveInlineReferenceMeasurement,
   resolveInlineReferenceSignature,
+  type InlineReferenceLayoutMetric,
 } from "./inline-reference";
 import {
   cacheLineBoundaries,
@@ -48,9 +53,12 @@ export type TextLineBoundary = {
   offset: number;
 };
 
+export type TextInlineReference = InlineReferenceLayoutMetric;
+
 type MeasuredTextLine = {
   end: number;
   height: number;
+  inlineReferences: TextInlineReference[] | null;
   start: number;
   text: string;
   width: number;
@@ -60,12 +68,14 @@ type MeasuredTextSegment = {
   breakable: boolean;
   end: number;
   height: number;
+  inlineReference: TextInlineReference | null;
   start: number;
   text: string;
   width: number;
 };
 
 type RichInlineMeasurementItem = {
+  inlineReference: TextInlineReference | null;
   leadingTrimLength: number;
   run: IndexedInline;
 };
@@ -90,14 +100,25 @@ type InternalPreparedRichInline = PreparedRichInline & {
   >;
 };
 
-const headingTypographyScale = [
-  { fontSize: 32, lineHeight: 36 },
-  { fontSize: 26, lineHeight: 32 },
-  { fontSize: 21, lineHeight: 28 },
-  { fontSize: 21, lineHeight: 28 },
-  { fontSize: 19, lineHeight: 26 },
-  { fontSize: 18, lineHeight: 26 },
+// Heading typography expressed as ratios over the document base font size,
+// so the whole hierarchy stays proportional at any base. At base 16 these
+// reproduce the canonical 32/36 → 18/26 sizes; at base 14 they collapse to
+// 28/32 → 16/23. `fontSizeRatio` scales the heading text; `lineHeightRatio`
+// is independent because heading line spacing tightens slightly faster than
+// font size grows (visual hierarchy reads cleaner that way).
+const HEADING_TYPOGRAPHY = [
+  { fontSizeRatio: 2.0, lineHeightRatio: 2.25 }, // H1
+  { fontSizeRatio: 1.625, lineHeightRatio: 2.0 }, // H2
+  { fontSizeRatio: 1.3125, lineHeightRatio: 1.75 }, // H3
+  { fontSizeRatio: 1.3125, lineHeightRatio: 1.75 }, // H4
+  { fontSizeRatio: 1.1875, lineHeightRatio: 1.625 }, // H5
+  { fontSizeRatio: 1.125, lineHeightRatio: 1.625 }, // H6
 ] as const;
+
+// Code block line height tracks the code font size (= baseFontSize - 1) at
+// the same ratio the hand-tuned defaults used (22/15), so block code stays
+// visually paired with inline code at any scale.
+const CODE_BLOCK_LINE_HEIGHT_RATIO = 22 / 15;
 
 const SANS_SERIF_STACK =
   '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
@@ -108,35 +129,73 @@ let textMeasurementContext:
   | CanvasRenderingContext2D
   | undefined;
 
-export function resolveTextBlockFont(block: Block | null) {
+// One bundle for the three font-related values measurement helpers need for a
+// given block: the block-resolved `font` (e.g. heading typography), the
+// block-resolved `lineHeight`, and the document `baseFontSize` (which inline
+// code derives from regardless of the surrounding block's font size).
+// Resolving once at the boundary keeps the call sites quiet and the trio
+// internally consistent.
+export type BlockTypography = {
+  baseFontSize: number;
+  font: string;
+  lineHeight: number;
+};
+
+export function resolveBlockTypography(
+  block: Block | null,
+  baseFontSize: number,
+  fallbackLineHeight: number,
+): BlockTypography {
+  return {
+    baseFontSize,
+    font: resolveTextBlockFont(block, baseFontSize),
+    lineHeight: resolveTextBlockLineHeight(block, fallbackLineHeight, baseFontSize),
+  };
+}
+
+export function resolveTextBlockFont(block: Block | null, baseFontSize: number) {
   if (block?.type === "heading") {
-    const { fontSize } = resolveHeadingTypography(block.depth);
+    const { fontSize } = resolveHeadingTypography(block.depth, baseFontSize);
 
     return `700 ${fontSize}px ${SANS_SERIF_STACK}`;
   }
 
   switch (block?.type) {
     case "code":
-      return codeTextFont;
+      return resolveCodeFont(baseFontSize);
     default:
-      return `16px ${SANS_SERIF_STACK}`;
+      return `${baseFontSize}px ${SANS_SERIF_STACK}`;
   }
 }
 
-export function resolveTextBlockLineHeight(block: Block | null, fallback: number) {
+export function resolveTextBlockLineHeight(
+  block: Block | null,
+  fallback: number,
+  baseFontSize: number,
+) {
   if (block?.type === "heading") {
-    return resolveHeadingTypography(block.depth).lineHeight;
+    return resolveHeadingTypography(block.depth, baseFontSize).lineHeight;
   }
 
   if (block?.type === "code") {
-    return 22;
+    // Tracks the code font size at the same ratio the hand-tuned defaults
+    // used (22 / 15) so block code stays visually paired with inline code at
+    // any scale. Clamped to 1 to match `resolveCodeFont`'s floor — together
+    // they keep the layout from collapsing at degenerate base font sizes.
+    return Math.max(1, Math.round((baseFontSize - 1) * CODE_BLOCK_LINE_HEIGHT_RATIO));
   }
 
   return fallback;
 }
 
-function resolveHeadingTypography(depth: number) {
-  return headingTypographyScale[depth - 1] ?? headingTypographyScale.at(-1)!;
+function resolveHeadingTypography(depth: number, baseFontSize: number) {
+  const { fontSizeRatio, lineHeightRatio } =
+    HEADING_TYPOGRAPHY[depth - 1] ?? HEADING_TYPOGRAPHY.at(-1)!;
+
+  return {
+    fontSize: Math.round(baseFontSize * fontSizeRatio),
+    lineHeight: Math.round(baseFontSize * lineHeightRatio),
+  };
 }
 
 // Pretext handles grapheme-aware wrapping internally. This helper is only for
@@ -158,13 +217,12 @@ function isAsciiText(text: string) {
 export function measureTextContainerLines(
   cache: LayoutCache,
   container: EditableRegion,
-  font: string,
   block: Block | null,
   availableWidth: number,
-  lineHeight: number,
+  typography: BlockTypography,
   resources: DocumentResources,
 ) {
-  const cacheKey = `${resolveRegionMeasurementCacheIdentity(container, resources)}:${availableWidth}:${lineHeight}:${font}`;
+  const cacheKey = `${resolveRegionMeasurementCacheIdentity(container, resources)}:${availableWidth}:${typography.lineHeight}:${typography.baseFontSize}:${typography.font}`;
   const cached = cache.measuredLines.get(cacheKey);
 
   if (cached) {
@@ -174,10 +232,9 @@ export function measureTextContainerLines(
   const measuredLines = createMeasuredTextLines(
     cache,
     container,
-    font,
     block,
     availableWidth,
-    lineHeight,
+    typography,
     resources,
   );
 
@@ -190,14 +247,14 @@ export function measureTextLineBoundaries(
   start: number,
   end: number,
   text: string,
-  font: string,
   availableWidth: number,
+  typography: BlockTypography,
   resources: DocumentResources,
 ): TextLineBoundary[] {
   // Pretext returns line ranges and widths, but it does not currently expose
   // every editor offset's x-position. Keep this boundary projection local so
   // caret placement, hit testing, and decoration clipping share one cache.
-  const cacheKey = `${resolveRegionMeasurementCacheIdentity(container, resources)}:${start}:${end}:${font}:${availableWidth}`;
+  const cacheKey = `${resolveRegionMeasurementCacheIdentity(container, resources)}:${start}:${end}:${typography.baseFontSize}:${typography.font}:${availableWidth}`;
   const cached = cache.lineBoundaries.get(cacheKey);
 
   if (cached) {
@@ -216,7 +273,7 @@ export function measureTextLineBoundaries(
 
   if (isSourceRegion(container)) {
     let offset = 0;
-    context.font = font;
+    context.font = typography.font;
 
     for (const advance of measureTextBoundaryAdvances(cache, context, text)) {
       width += advance.width;
@@ -240,8 +297,7 @@ export function measureTextLineBoundaries(
 
     const reference = resolveInlineReferenceMeasurement(run, context, {
       availableWidth,
-      font,
-      lineHeight: 0,
+      typography,
       resources,
     });
 
@@ -256,7 +312,7 @@ export function measureTextLineBoundaries(
       continue;
     }
 
-    context.font = resolveInlineTextStyle(font, inlineMarks(run)).font;
+    context.font = resolveInlineTextStyle(typography, inlineMarks(run)).font;
 
     for (const advance of measureTextBoundaryAdvances(cache, context, segmentText)) {
       width += advance.width;
@@ -294,10 +350,9 @@ function prepareTextSegments(
 function createMeasuredTextLines(
   cache: LayoutCache,
   container: EditableRegion,
-  font: string,
   block: Block | null,
   availableWidth: number,
-  lineHeight: number,
+  typography: BlockTypography,
   resources: DocumentResources,
 ) {
   const text = container.text;
@@ -307,7 +362,8 @@ function createMeasuredTextLines(
     return [
       {
         end: 0,
-        height: lineHeight,
+        height: typography.lineHeight,
+        inlineReferences: null,
         start: 0,
         text: "",
         width: 0,
@@ -316,27 +372,19 @@ function createMeasuredTextLines(
   }
 
   if (requiresLocalInlineLayout(inlineProfile)) {
-    return createInlineMeasuredTextLines(
-      cache,
-      container,
-      font,
-      availableWidth,
-      lineHeight,
-      resources,
-    );
+    return createInlineMeasuredTextLines(cache, container, availableWidth, typography, resources);
   }
 
   if (inlineProfile.hasRichInline) {
-    return createRichInlineMeasuredTextLines(
-      container,
-      font,
-      availableWidth,
-      lineHeight,
-      resources,
-    );
+    return createRichInlineMeasuredTextLines(container, availableWidth, typography, resources);
   }
 
-  const prepared = prepareTextSegments(cache, text, font, resolveWhitespace(block, inlineProfile));
+  const prepared = prepareTextSegments(
+    cache,
+    text,
+    typography.font,
+    resolveWhitespace(block, inlineProfile),
+  );
   const resolveOffset = createCursorOffsetResolver(prepared.segments);
   const lines: MeasuredTextLine[] = [];
 
@@ -346,7 +394,8 @@ function createMeasuredTextLines(
 
     lines.push({
       end,
-      height: lineHeight,
+      height: typography.lineHeight,
+      inlineReferences: null,
       start,
       text: text.slice(start, end),
       width: line.width,
@@ -356,7 +405,8 @@ function createMeasuredTextLines(
   if (inlineProfile.hasHardBreak && text.endsWith("\n")) {
     lines.push({
       end: text.length,
-      height: lineHeight,
+      height: typography.lineHeight,
+      inlineReferences: null,
       start: text.length,
       text: "",
       width: 0,
@@ -367,7 +417,7 @@ function createMeasuredTextLines(
   // visual row after a trailing source newline. Materialize it so code-block
   // carets can land immediately after pressing Enter at end-of-source.
   return isSourceRegion(container) && text.endsWith("\n")
-    ? materializeTrailingSourceTextLine(lines, text.length, lineHeight)
+    ? materializeTrailingSourceTextLine(lines, text.length, typography.lineHeight)
     : lines;
 }
 
@@ -385,6 +435,7 @@ function materializeTrailingSourceTextLine(
     {
       end: offset,
       height: lineHeight,
+      inlineReferences: null,
       start: offset,
       text: "",
       width: 0,
@@ -404,18 +455,16 @@ function resolveMeasuredLineEnd(text: string, start: number, end: number) {
 function createInlineMeasuredTextLines(
   cache: LayoutCache,
   container: EditableRegion,
-  font: string,
   availableWidth: number,
-  lineHeight: number,
+  typography: BlockTypography,
   resources: DocumentResources,
 ) {
   const segments = flattenMeasuredInlineSegments(
     cache,
     getTextMeasurementContext(),
     container,
-    font,
     availableWidth,
-    lineHeight,
+    typography,
     resources,
   );
 
@@ -423,7 +472,8 @@ function createInlineMeasuredTextLines(
     return [
       {
         end: 0,
-        height: lineHeight,
+        height: typography.lineHeight,
+        inlineReferences: null,
         start: 0,
         text: "",
         width: 0,
@@ -431,21 +481,19 @@ function createInlineMeasuredTextLines(
     ];
   }
 
-  return layoutSegmentsIntoLines(segments, container.text, availableWidth, lineHeight);
+  return layoutSegmentsIntoLines(segments, container.text, availableWidth, typography.lineHeight);
 }
 
 function createRichInlineMeasuredTextLines(
   container: EditableRegion,
-  font: string,
   availableWidth: number,
-  lineHeight: number,
+  typography: BlockTypography,
   resources: DocumentResources,
 ) {
   const { items, measurementItems } = createRichInlineMeasurementItems(
     container,
-    font,
     availableWidth,
-    lineHeight,
+    typography,
     resources,
   );
 
@@ -453,7 +501,8 @@ function createRichInlineMeasuredTextLines(
     return [
       {
         end: 0,
-        height: lineHeight,
+        height: typography.lineHeight,
+        inlineReferences: null,
         start: 0,
         text: "",
         width: 0,
@@ -463,6 +512,7 @@ function createRichInlineMeasuredTextLines(
 
   const prepared = prepareRichInline(items);
   const internalPrepared = prepared as InternalPreparedRichInline;
+  const inlineReferences = resolveInlineReferencesFromMeasurementItems(measurementItems);
   const lines: MeasuredTextLine[] = [];
 
   walkRichInlineLineRanges(prepared, availableWidth, (line) => {
@@ -474,7 +524,8 @@ function createRichInlineMeasuredTextLines(
 
     lines.push({
       end: range.end,
-      height: lineHeight,
+      height: typography.lineHeight,
+      inlineReferences: resolveLineInlineReferences(inlineReferences, range.start, range.end),
       start: range.start,
       text: container.text.slice(range.start, range.end),
       width: line.width,
@@ -486,7 +537,8 @@ function createRichInlineMeasuredTextLines(
     : [
         {
           end: 0,
-          height: lineHeight,
+          height: typography.lineHeight,
+          inlineReferences: null,
           start: 0,
           text: "",
           width: 0,
@@ -494,11 +546,24 @@ function createRichInlineMeasuredTextLines(
       ];
 }
 
+function resolveInlineReferencesFromMeasurementItems(
+  measurementItems: RichInlineMeasurementItem[],
+) {
+  const references: TextInlineReference[] = [];
+
+  for (const item of measurementItems) {
+    if (item.inlineReference) {
+      references.push(item.inlineReference);
+    }
+  }
+
+  return references;
+}
+
 function createRichInlineMeasurementItems(
   container: EditableRegion,
-  font: string,
   availableWidth: number,
-  lineHeight: number,
+  typography: BlockTypography,
   resources: DocumentResources,
 ) {
   const items: RichInlineItem[] = [];
@@ -509,14 +574,14 @@ function createRichInlineMeasurementItems(
     const runText = container.text.slice(run.start, run.end);
     const reference = resolveInlineReferenceMeasurement(run, context, {
       availableWidth,
-      font,
-      lineHeight,
+      typography,
       resources,
     });
 
     if (reference?.richItem) {
       items.push(reference.richItem);
       measurementItems.push({
+        inlineReference: reference.inlineReference,
         leadingTrimLength: 0,
         run,
       });
@@ -524,10 +589,11 @@ function createRichInlineMeasurementItems(
     }
 
     items.push({
-      font: resolveInlineTextStyle(font, inlineMarks(run)).font,
+      font: resolveInlineTextStyle(typography, inlineMarks(run)).font,
       text: runText,
     });
     measurementItems.push({
+      inlineReference: null,
       leadingTrimLength: resolveLeadingCollapsibleLength(runText),
       run,
     });
@@ -668,6 +734,7 @@ function layoutSegmentsIntoLines(
       lines.push({
         end: lineStart,
         height: lineHeight,
+        inlineReferences: null,
         start: lineStart,
         text: "",
         width: 0,
@@ -712,6 +779,7 @@ function layoutSegmentsIntoLines(
       lines.push({
         end: lineEnd,
         height: maxHeight,
+        inlineReferences: resolveSegmentInlineReferences(segments, index, cursor),
         start: lineStart,
         text: text.slice(lineStart, lineEnd),
         width,
@@ -726,6 +794,7 @@ function layoutSegmentsIntoLines(
       lines.push({
         end: lineEnd,
         height: maxHeight,
+        inlineReferences: resolveSegmentInlineReferences(segments, index, breakIndex + 1),
         start: lineStart,
         text: text.slice(lineStart, lineEnd),
         width: widthAtBreak,
@@ -739,6 +808,11 @@ function layoutSegmentsIntoLines(
     lines.push({
       end: lineEnd,
       height: maxHeight,
+      inlineReferences: resolveSegmentInlineReferences(
+        segments,
+        index,
+        Math.max(index + 1, cursor),
+      ),
       start: lineStart,
       text: text.slice(lineStart, lineEnd),
       width,
@@ -756,6 +830,7 @@ function layoutSegmentsIntoLines(
     lines.push({
       end: lastSegment.end,
       height: lineHeight,
+      inlineReferences: null,
       start: lastSegment.end,
       text: "",
       width: 0,
@@ -765,13 +840,42 @@ function layoutSegmentsIntoLines(
   return lines;
 }
 
+function resolveSegmentInlineReferences(
+  segments: MeasuredTextSegment[],
+  startIndex: number,
+  endIndex: number,
+) {
+  const references: TextInlineReference[] = [];
+
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const reference = segments[index]?.inlineReference;
+
+    if (reference) {
+      references.push(reference);
+    }
+  }
+
+  return references.length > 0 ? references : null;
+}
+
+function resolveLineInlineReferences(
+  references: TextInlineReference[],
+  startOffset: number,
+  endOffset: number,
+) {
+  const lineReferences = references.filter(
+    (reference) => reference.end > startOffset && reference.start < endOffset,
+  );
+
+  return lineReferences.length > 0 ? lineReferences : null;
+}
+
 function flattenMeasuredInlineSegments(
   cache: LayoutCache,
   context: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
   container: EditableRegion,
-  font: string,
   availableWidth: number,
-  lineHeight: number,
+  typography: BlockTypography,
   resources: DocumentResources,
 ) {
   const segments: MeasuredTextSegment[] = [];
@@ -780,8 +884,7 @@ function flattenMeasuredInlineSegments(
     const runText = container.text.slice(run.start, run.end);
     const reference = resolveInlineReferenceMeasurement(run, context, {
       availableWidth,
-      font,
-      lineHeight,
+      typography,
       resources,
     });
 
@@ -790,6 +893,7 @@ function flattenMeasuredInlineSegments(
         breakable: true,
         end: run.end,
         height: reference.height,
+        inlineReference: reference.inlineReference,
         start: run.start,
         text: reference.text,
         width: reference.width,
@@ -797,7 +901,7 @@ function flattenMeasuredInlineSegments(
       continue;
     }
 
-    context.font = resolveInlineTextStyle(font, inlineMarks(run)).font;
+    context.font = resolveInlineTextStyle(typography, inlineMarks(run)).font;
 
     let offset = run.start;
 
@@ -808,7 +912,8 @@ function flattenMeasuredInlineSegments(
       segments.push({
         breakable: /\s/.test(grapheme),
         end,
-        height: lineHeight,
+        height: typography.lineHeight,
+        inlineReference: null,
         start,
         text: grapheme,
         width: grapheme === "\n" ? 0 : measureGraphemeWidth(cache, context, grapheme),

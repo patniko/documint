@@ -4,8 +4,26 @@ import {
   type CommentThread,
   type MentionTarget,
 } from "@/document";
-import { toggleMark, type EditorPresence, type SelectionFormatting } from "@/editor";
-import { Check, Code, MessageSquarePlus, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import {
+  deleteSelection,
+  toggleMark,
+  type EditorPresence,
+  type SelectionFormatting,
+} from "@/editor";
+import type { MarkdownOptions } from "@/markdown";
+import {
+  Check,
+  Clipboard,
+  ClipboardPaste,
+  Code,
+  Copy,
+  MessageSquarePlus,
+  Pencil,
+  RotateCcw,
+  Scissors,
+  Trash2,
+  Type,
+} from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -17,13 +35,15 @@ import {
 } from "react";
 import type { CompletionSource } from "../../completions/completions";
 import type { DocumintAction } from "../../Documint";
-import { useEditorCommand } from "../../store";
+import { type DocumintStore, useDocumintStore, useEditorCommand } from "../../store";
+import { copySelectionAsMarkdown, pastePlainText } from "../../lib/clipboard";
 import { resolvePresenceName } from "../../lib/presence";
+import { LeafButton } from "./core/LeafButton";
 import { LeafDivider } from "./core/LeafDivider";
-import { LeafInput } from "./core/LeafInput";
-import { MarkdownOutput } from "./core/MarkdownOutput";
-import { formattingMarkDescriptors, type FormattingMarkDescriptor } from "./formatting";
-import { LeafToolbar } from "./toolbar/LeafToolbar";
+import { LeafInput } from "./core/input/LeafInput";
+import { LeafMarkdown } from "./core/LeafMarkdown";
+import { formattingMarkDescriptors, type FormattingMarkDescriptor } from "./core/lib/formatting";
+import { LeafToolbar } from "./core/toolbar/LeafToolbar";
 
 type AnnotationLink = {
   title: string | null;
@@ -38,6 +58,7 @@ type AnnotationLeafBaseProps = {
 
 type AnnotationCreateLeafProps = AnnotationLeafBaseProps & {
   formatting: SelectionFormatting;
+  markdownOptions?: MarkdownOptions;
   mode: "create";
   onCreateThread: (body: string) => void;
   actions?: readonly DocumintAction<void>[];
@@ -71,6 +92,10 @@ const leadingFormattingMarkButtons = formattingMarkDescriptors.filter(
 const trailingFormattingMarkButtons = formattingMarkDescriptors.filter(
   (descriptor) => descriptor.group === "trailing",
 );
+const overflowFormattingMarkButtons = [
+  { group: "trailing", icon: Code, label: "Code", mark: "code" },
+  ...trailingFormattingMarkButtons,
+] satisfies readonly FormattingMarkDescriptor[];
 
 export function AnnotationLeaf(props: AnnotationLeafProps) {
   const createMode = props.mode === "create";
@@ -91,9 +116,11 @@ export function AnnotationLeaf(props: AnnotationLeafProps) {
   const [isInitialCommentVisible, setIsInitialCommentVisible] = useState(!animateInitialComment);
   const [isExpanded, setIsExpanded] = useState(defaultCreateExpanded);
   const [isTransitioningFromCreate, setIsTransitioningFromCreate] = useState(false);
+  const [isClipboardCopied, setIsClipboardCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const commentsListRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const clipboardCopiedTimeoutRef = useRef<number | null>(null);
   const hasScrolledThreadRef = useRef(false);
   const scrolledThreadIdRef = useRef<string | null>(null);
   const completionSources = props.completionSources;
@@ -113,14 +140,19 @@ export function AnnotationLeaf(props: AnnotationLeafProps) {
   const toggleResolved = threadProps?.onToggleResolved ?? noop;
   const formatting = createProps?.formatting ?? defaultFormatting;
   const activeFormattingMarks = formatting.marks;
-  const activeCode = activeFormattingMarks.includes("code");
   const formattingSupported = formatting.supported;
+  const store = useDocumintStore();
   const toggleMarkCommand = useEditorCommand(toggleMark);
+  const deleteSelectionCommand = useEditorCommand(deleteSelection);
+  const pastePlainTextCommand = useEditorCommand(pastePlainText);
+  const markdownOptions = createProps?.markdownOptions;
   const actions = createProps?.actions ?? [];
+  const hasActiveOverflowFormattingMark = overflowFormattingMarkButtons.some((button) =>
+    activeFormattingMarks.includes(button.mark),
+  );
   const renderFormattingMarkButton = (button: FormattingMarkDescriptor) => (
     <LeafToolbar.Button
       active={activeFormattingMarks.includes(button.mark)}
-      className="documint-comment-leaf-create-mark"
       disabled={!formattingSupported}
       icon={button.icon}
       key={button.mark}
@@ -128,12 +160,55 @@ export function AnnotationLeaf(props: AnnotationLeafProps) {
       onClick={() => toggleMarkCommand(button.mark)}
     />
   );
+  const selectOverflowFormattingMark = (value: string) => {
+    const descriptor = overflowFormattingMarkButtons.find((button) => button.mark === value);
+
+    if (!descriptor) {
+      return;
+    }
+
+    toggleMarkCommand(descriptor.mark);
+  };
+  const showClipboardCopiedFeedback = () => {
+    setIsClipboardCopied(true);
+
+    if (clipboardCopiedTimeoutRef.current !== null) {
+      window.clearTimeout(clipboardCopiedTimeoutRef.current);
+    }
+
+    clipboardCopiedTimeoutRef.current = window.setTimeout(() => {
+      setIsClipboardCopied(false);
+      clipboardCopiedTimeoutRef.current = null;
+    }, 2000);
+  };
+  const selectClipboardAction = (value: string) => {
+    switch (value) {
+      case "copy":
+        showClipboardCopiedFeedback();
+        void copySelectedTextToClipboard(store);
+        break;
+      case "cut":
+        void cutSelectedTextToClipboard(store, deleteSelectionCommand);
+        break;
+      case "paste":
+        void pasteClipboardText(pastePlainTextCommand, markdownOptions);
+        break;
+    }
+  };
   const composerPlaceholder = canEdit
     ? createMode
       ? "Add a comment"
       : "Reply to this comment"
     : "Comment editing is disabled";
   const composerValue = createMode ? createDraft : replyDraft;
+
+  useEffect(() => {
+    return () => {
+      if (clipboardCopiedTimeoutRef.current !== null) {
+        window.clearTimeout(clipboardCopiedTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (
@@ -256,9 +331,13 @@ export function AnnotationLeaf(props: AnnotationLeafProps) {
     setCreateDraft("");
   };
 
+  // Comfortable padding for thread mode and the expanded composer; the
+  // collapsed create chrome renders only a `LeafToolbar`, so it lets the
+  // toolbar own all the spacing (otherwise the two would stack).
+  const paddingClass = isExpandedCreateMode ? "p-3" : "";
   const contentClassName = showCreateChrome
-    ? `documint-comment-leaf documint-comment-leaf-create${isExpandedCreateMode ? " is-expanded" : ""}`
-    : "documint-comment-leaf";
+    ? `comment-leaf comment-leaf-create${isExpandedCreateMode ? " is-expanded" : ""}${paddingClass ? ` ${paddingClass}` : ""}`
+    : `comment-leaf ${paddingClass}`;
   const shouldRenderBody = showThreadChrome || showRootComment || showComposer;
 
   const content = shouldRenderBody ? (
@@ -301,47 +380,64 @@ export function AnnotationLeaf(props: AnnotationLeafProps) {
   ) : null;
 
   return (
-    <div className={contentClassName} data-resolved={isResolved ? "true" : undefined} ref={rootRef}>
-      <div className={showCreateChrome ? "documint-comment-leaf-create-shell" : undefined}>
+    <div className={contentClassName} ref={rootRef}>
+      <div className={showCreateChrome ? "comment-leaf-create-shell" : undefined}>
         {showCreateChrome ? (
-          <LeafToolbar>
-            <LeafToolbar.Button
-              className="documint-comment-leaf-create-button"
-              icon={MessageSquarePlus}
-              label="Add comment"
-              onClick={() => setIsExpanded(true)}
-            />
-            <LeafToolbar.Divider />
-            {leadingFormattingMarkButtons.map(renderFormattingMarkButton)}
-            <LeafToolbar.Divider />
-            <LeafToolbar.Button
-              active={activeCode}
-              className="documint-comment-leaf-create-mark"
-              disabled={!formattingSupported}
-              icon={Code}
-              label="Code"
-              onClick={() => toggleMarkCommand("code")}
-            />
-            {trailingFormattingMarkButtons.map(renderFormattingMarkButton)}
-            {actions.length > 0
-              ? [
-                  <LeafToolbar.Divider key="actions-divider" />,
-                  ...actions.map((action, index) => {
-                    return (
-                      <LeafToolbar.Button
-                        className="documint-comment-leaf-create-mark"
-                        icon={action.icon}
-                        key={`${action.label}:${index}`}
-                        label={action.label}
-                        onClick={() => action.onClick()}
-                      />
-                    );
-                  }),
-                ]
-              : null}
-          </LeafToolbar>
+          <div className="comment-leaf-create-toolbar">
+            <LeafToolbar>
+              <LeafToolbar.Button
+                icon={MessageSquarePlus}
+                label="Add comment"
+                onClick={() => setIsExpanded(true)}
+              />
+              <LeafToolbar.Menu
+                icon={isClipboardCopied ? Check : Clipboard}
+                label="Clipboard"
+                onSelect={selectClipboardAction}
+              >
+                <LeafToolbar.MenuItem icon={Copy} text="Copy" value="copy" />
+                <LeafToolbar.MenuItem icon={Scissors} text="Cut" value="cut" />
+                <LeafToolbar.MenuDivider />
+                <LeafToolbar.MenuItem icon={ClipboardPaste} text="Paste" value="paste" />
+              </LeafToolbar.Menu>
+              <LeafToolbar.Divider />
+              {leadingFormattingMarkButtons.map(renderFormattingMarkButton)}
+              <LeafToolbar.Menu
+                active={hasActiveOverflowFormattingMark}
+                icon={Type}
+                label="More formatting"
+                onSelect={selectOverflowFormattingMark}
+              >
+                {overflowFormattingMarkButtons.map((button) => (
+                  <LeafToolbar.MenuItem
+                    active={activeFormattingMarks.includes(button.mark)}
+                    disabled={!formattingSupported}
+                    icon={button.icon}
+                    key={button.mark}
+                    text={button.label}
+                    value={button.mark}
+                  />
+                ))}
+              </LeafToolbar.Menu>
+              {actions.length > 0
+                ? [
+                    <LeafToolbar.Divider key="actions-divider" />,
+                    ...actions.map((action, index) => {
+                      return (
+                        <LeafToolbar.Button
+                          icon={action.icon}
+                          key={`${action.label}:${index}`}
+                          label={action.label}
+                          onClick={() => action.onClick()}
+                        />
+                      );
+                    }),
+                  ]
+                : null}
+            </LeafToolbar>
+          </div>
         ) : null}
-        <div className={showCreateChrome ? "documint-comment-leaf-create-content" : undefined}>
+        <div className={showCreateChrome ? "comment-leaf-create-content" : undefined}>
           {content}
         </div>
       </div>
@@ -428,58 +524,46 @@ function AnnotationLeafBody({
   return (
     <>
       {showThreadChrome ? (
-        <div className="documint-comment-leaf-header">
-          <span className="documint-comment-leaf-age">{threadAge}</span>
-          <div className="documint-comment-leaf-actions">
-            <button
-              className="documint-leaf-action"
-              aria-label={isResolved ? "Reopen comment" : "Resolve comment"}
+        <div className="comment-leaf-header">
+          <span className="comment-leaf-age">{threadAge}</span>
+          <div className="comment-leaf-actions">
+            <LeafButton
               disabled={!canEdit}
+              icon={isResolved ? RotateCcw : Check}
               onClick={onToggleResolved}
               title={isResolved ? "Reopen comment" : "Resolve comment"}
-              type="button"
-            >
-              {isResolved ? (
-                <RotateCcw size={14} strokeWidth={2.2} />
-              ) : (
-                <Check size={14} strokeWidth={2.2} />
-              )}
-            </button>
-            <button
-              className="documint-leaf-action documint-leaf-action-danger"
-              aria-label="Delete comment thread"
+            />
+            <LeafButton
+              danger
               disabled={!canEdit}
+              icon={Trash2}
               onClick={onDeleteThread}
               title="Delete comment thread"
-              type="button"
-            >
-              <Trash2 size={14} strokeWidth={2.2} />
-            </button>
+            />
           </div>
         </div>
       ) : null}
       {showThreadChrome && link ? (
         <>
-          <div className="documint-comment-leaf-link">
-            {link.title ? <div className="documint-link-leaf-title">{link.title}</div> : null}
-            <div className="documint-link-leaf-url">{link.url}</div>
+          <div className="comment-leaf-link">
+            {link.title ? (
+              <div className="text-leaf-text text-xs font-semibold">{link.title}</div>
+            ) : null}
+            <div className="min-w-0 text-leaf-secondary text-xs wrap-anywhere">{link.url}</div>
           </div>
           <LeafDivider />
         </>
       ) : null}
-      <div
-        className={`documint-comment-thread${showRootComment ? "" : " is-empty"}`}
-        ref={commentsListRef}
-      >
+      <div className={`comment-thread${showRootComment ? "" : " is-empty"}`} ref={commentsListRef}>
         <article
           className={
             showRootComment
-              ? `documint-comment-message documint-comment-message-root${isInitialCommentVisible ? " is-visible" : ""}`
-              : "documint-comment-message documint-comment-message-root is-hidden"
+              ? `comment-message comment-message-root${isInitialCommentVisible ? " is-visible" : ""}`
+              : "comment-message comment-message-root is-hidden"
           }
         >
           {rootComment ? (
-            <MarkdownOutput
+            <LeafMarkdown
               mentionTargets={mentionTargets}
               onDoubleClick={() => onBeginEditingComment(0, rootComment.body)}
               value={rootComment.body}
@@ -491,37 +575,27 @@ function AnnotationLeafBody({
           const isEditing = editingCommentIndex === actualIndex;
 
           return (
-            <article
-              className="documint-comment-message"
-              key={`${comment.updatedAt}:${actualIndex}`}
-            >
+            <article className="comment-message" key={`${comment.updatedAt}:${actualIndex}`}>
               {!isEditing ? (
-                <div className="documint-comment-message-meta">
+                <div className="comment-message-meta">
                   <span>{formatRelativeTime(comment.updatedAt)}</span>
                   {canMutateThread ? (
-                    <div className="documint-comment-leaf-actions">
-                      <button
-                        className="documint-leaf-action"
-                        aria-label="Edit comment"
+                    <div className="comment-leaf-actions">
+                      <LeafButton
                         disabled={!canMutateThread}
+                        icon={Pencil}
                         onClick={() => {
                           onBeginEditingComment(actualIndex, comment.body);
                         }}
                         title="Edit comment"
-                        type="button"
-                      >
-                        <Pencil size={14} strokeWidth={2.2} />
-                      </button>
-                      <button
-                        className="documint-leaf-action documint-leaf-action-danger"
-                        aria-label="Delete comment"
+                      />
+                      <LeafButton
+                        danger
                         disabled={!canMutateThread}
+                        icon={Trash2}
                         onClick={() => onDeleteComment(actualIndex)}
                         title="Delete comment"
-                        type="button"
-                      >
-                        <Trash2 size={14} strokeWidth={2.2} />
-                      </button>
+                      />
                     </div>
                   ) : null}
                 </div>
@@ -541,7 +615,7 @@ function AnnotationLeafBody({
                   value={editDraft}
                 />
               ) : (
-                <MarkdownOutput
+                <LeafMarkdown
                   mentionTargets={mentionTargets}
                   onDoubleClick={() => onBeginEditingComment(actualIndex, comment.body)}
                   value={comment.body}
@@ -553,7 +627,7 @@ function AnnotationLeafBody({
       </div>
       {showThreadChrome ? <LeafDivider /> : null}
       <div
-        className={`documint-comment-reply${showThreadChrome ? "" : " is-standalone"}${isComposerVisible ? " is-visible" : ""}`}
+        className={`comment-reply${showThreadChrome ? "" : " is-standalone"}${isComposerVisible ? " is-visible" : ""}`}
       >
         <LeafInput
           actions={
@@ -579,7 +653,9 @@ function AnnotationLeafBody({
           rows={3}
           value={composerValue}
         />
-        {mode === "thread" && presence ? <CommentPresenceStatus presence={presence} /> : null}
+        {mode === "thread" && presence ? (
+          <CommentPresenceStatus isResolved={isResolved} presence={presence} />
+        ) : null}
       </div>
     </>
   );
@@ -599,25 +675,83 @@ function resolveMentionTargets(
   );
 }
 
-function CommentPresenceStatus({ presence }: { presence: EditorPresence }) {
+async function copySelectedTextToClipboard(store: DocumintStore) {
+  const markdown = copySelectionAsMarkdown(store.editor.getState());
+
+  if (markdown === null) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+  } catch {
+    // Clipboard access is permission- and secure-context-gated.
+  }
+}
+
+async function cutSelectedTextToClipboard(
+  store: DocumintStore,
+  deleteSelectionCommand: () => unknown,
+) {
+  const markdown = copySelectionAsMarkdown(store.editor.getState());
+
+  if (markdown === null) {
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(markdown);
+    deleteSelectionCommand();
+  } catch {
+    // Keep the selection intact if the browser refuses clipboard access.
+  }
+}
+
+async function pasteClipboardText(
+  pastePlainTextCommand: (text: string, markdownOptions?: MarkdownOptions) => unknown,
+  markdownOptions?: MarkdownOptions,
+) {
+  let text = "";
+
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    // Clipboard reads may be blocked even from a menu tap.
+    return;
+  }
+
+  if (!text) {
+    return;
+  }
+
+  pastePlainTextCommand(text, markdownOptions);
+}
+
+function CommentPresenceStatus({
+  isResolved,
+  presence,
+}: {
+  isResolved: boolean;
+  presence: EditorPresence;
+}) {
   const name = resolvePresenceName(presence);
   const status = presence.status?.trim();
 
   return (
-    <div className="documint-comment-presence">
+    <div className="comment-presence">
       <span
         aria-hidden="true"
-        className="documint-comment-presence-dot"
+        className={`comment-presence-dot${isResolved ? "" : " is-pulsing"}`}
         style={
           {
-            "--documint-comment-presence-color": presence.color ?? "var(--documint-leaf-accent)",
+            "--comment-presence-color": presence.color ?? "var(--documint-leaf-accent)",
           } as CSSProperties
         }
       >
         {presence.avatarUrl ? (
           <img
             alt=""
-            className="documint-comment-presence-avatar"
+            className="comment-presence-avatar"
             draggable={false}
             src={presence.avatarUrl}
           />
@@ -625,7 +759,7 @@ function CommentPresenceStatus({ presence }: { presence: EditorPresence }) {
       </span>
       <span>
         {name} is working on this
-        {status ? <span className="documint-comment-presence-status"> ({status})</span> : null}
+        {status ? <span className="comment-presence-status"> ({status})</span> : null}
       </span>
     </div>
   );

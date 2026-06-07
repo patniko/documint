@@ -1,5 +1,4 @@
-import type { PointerEventHandler } from "react";
-import type { DocumentLeafBase, DocumentLeafResolution } from "./shared";
+import type { DocumentAnchorResolution, DocumentAnchorTarget } from "./shared";
 import type { DocumintLeafPlacement, ResolvedSideColumn } from "../../../lib/side-column";
 
 export type MeasuredLeafTarget = {
@@ -29,12 +28,12 @@ export function resolveDocumentLeafResolution({
 }: {
   context: LeafPlacementContext;
   isHoverLeaf: boolean;
-  leaf: DocumentLeafBase;
+  leaf: DocumentAnchorTarget;
   measured: MeasuredLeafTarget;
-  onPointerEnter?: PointerEventHandler<HTMLDivElement>;
-  onPointerLeave?: PointerEventHandler<HTMLDivElement>;
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
   placement: DocumintLeafPlacement;
-}): DocumentLeafResolution | null {
+}): DocumentAnchorResolution | null {
   const inlineBottom = measured.top + measured.height;
   const viewportBottom = context.viewportTop + context.viewportHeight;
 

@@ -1,3 +1,21 @@
+## 🗓️ v0.0.27 (06-06-26)
+
+- Presence avatars now pulse when working anchored to an unresolved comment
+- Added x-ray mode to the debug-time playground
+
+## 🗓️ v0.0.26 (06-04-26)
+
+- Added a new font size setting to the theme API
+- Added an initial canvas extension for the GitHub Copilot app
+
+## 🗓️ v0.0.25 (06-02-26)
+
+- Introduced a new VS Code extension (still super early!)
+
+## 🗓️ v0.0.24 (05-31-26)
+
+- The selection leaf now includes a menu to copy/cut/paste (which is really useful on mobile)
+
 ## 🗓️ v0.0.23 (05-30-26)
 
 - Comments now support basic markdown rendering
