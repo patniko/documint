@@ -1,6 +1,6 @@
 {
   "name": "@patniko/documint",
-  "version": "0.0.28",
+  "version": "0.0.29",
   "description": "Fork of lostintangent/documint — a canvas-based, batteries-included markdown editor for React.",
   "license": "MIT",
   "repository": {
