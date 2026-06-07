@@ -84,11 +84,27 @@ import { Documint } from "documint";
 export function App() {
   const [content, setContent] = useState("Commented markdown");
 
+  return <Documint commentTrigger="caret" content={content} onContentChanged={setContent} />;
+}
+```
+
+## Side Column Tools
+
+Contextual leaves render inline by default. Set `leafPlacement="side-column"` to reserve a right-side column for the active comment thread and cursor/selection tools while keeping typeahead completions inline near the caret. The editor falls back to inline placement when the configured column would leave too little room for the document text.
+
+```tsx
+import { useState } from "react";
+import { Documint } from "documint";
+
+export function App() {
+  const [content, setContent] = useState("Commented markdown");
+
   return (
     <Documint
-      commentTrigger="caret"
       content={content}
+      leafPlacement="side-column"
       onContentChanged={setContent}
+      sideColumn={{ width: 320, gap: 16, minTextWidth: 360 }}
     />
   );
 }

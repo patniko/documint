@@ -20,6 +20,7 @@ import type {
 } from "@/editor";
 import type { PointerEventHandler } from "react";
 import type { CompletionItem } from "../../../completions/completions";
+import type { DocumintLeafPlacement } from "../../../lib/side-column";
 
 // Declarative anchoring intent emitted by leaf-producing hooks. Every
 // leaf candidate kind extends this base.
@@ -57,7 +58,7 @@ export type DocumentLeafResolution = {
   // hand-off surface). False for cursor and selection leaves — the
   // wrapper also becomes pointer-event-transparent (see styles.css).
   bridge: boolean;
-  // Document-absolute anchor coordinates.
+  // Page-space anchor coordinates.
   left: number;
   top: number;
   // Hover-bridge handlers — set only when `bridge: true`.
@@ -66,6 +67,8 @@ export type DocumentLeafResolution = {
   // Extra vertical breathing room from the anchor, applied symmetrically
   // above or below (CSS variable `--documint-leaf-padding-y`).
   paddingY: number;
+  placement: DocumintLeafPlacement;
+  width?: number;
 };
 
 // Leaf shown when the caret sits on an empty top-level paragraph — the

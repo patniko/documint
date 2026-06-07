@@ -18,6 +18,12 @@ import {
   useState,
 } from "react";
 import { resolvePointerPointInScrollContainer } from "../lib/pointer";
+import {
+  resolveSideColumnLayout,
+  type DocumintLeafPlacement,
+  type DocumintSideColumnOptions,
+  type ResolvedSideColumn,
+} from "../lib/side-column";
 import { useDocumintStore, type DocumintStore } from "../store";
 import type { EditorLayoutHandle } from "../store/layout/store";
 
@@ -42,7 +48,9 @@ const DRAG_AUTO_SCROLL_INCREMENT = 18;
 const SCROLL_SETTLE_MS = 250;
 
 type UseViewportOptions = {
+  leafPlacement: DocumintLeafPlacement;
   renderResources: DocumentResources | null;
+  sideColumn?: DocumintSideColumnOptions;
   theme: ResolvedEditorTheme;
   // Invoked after native scrolling has been quiet for `SCROLL_SETTLE_MS`.
   // The host wires this to its render scheduler so a fresh commit can
@@ -92,6 +100,10 @@ export type ViewportController = {
   state: {
     scrollContentHeight: number;
     layout: EditorLayoutHandle;
+    sideColumn: ResolvedSideColumn;
+    surfaceWidth: number;
+    // Width of the text/canvas region. In side-column mode this is narrower
+    // than the scroll-container surface width.
     viewportWidth: number;
     viewportHeight: number;
     viewportTop: number;
@@ -140,8 +152,10 @@ export type ViewportController = {
  *     coordinate translation and drag-edge autoscroll.
  */
 export function useViewport({
+  leafPlacement,
   onScrollSettle,
   renderResources,
+  sideColumn,
   theme,
 }: UseViewportOptions): ViewportController {
   /* Internal state */
@@ -156,7 +170,13 @@ export function useViewport({
   const [viewportHeight, setViewportHeight] = useState(240);
   const [viewportTop, setViewportTopState] = useState(0);
   const [scrollContentHeight, setScrollContentHeight] = useState(240);
-  const viewportWidth = resolveViewportWidth(measuredViewportWidth);
+  const surfaceWidth = resolveViewportWidth(measuredViewportWidth);
+  const resolvedSideColumn = resolveSideColumnLayout({
+    placement: leafPlacement,
+    sideColumn,
+    surfaceWidth,
+  });
+  const viewportWidth = resolvedSideColumn.textWidth;
 
   /* Layout cache resolver */
 
@@ -315,7 +335,16 @@ export function useViewport({
   const resolvePoint = useEffectEvent(
     (event: PointerEvent<HTMLElement> | MouseEvent<HTMLElement>): EditorPoint | null => {
       const scrollContainer = scrollContainerRef.current;
-      return scrollContainer ? resolvePointerPointInScrollContainer(event, scrollContainer) : null;
+      if (!scrollContainer) {
+        return null;
+      }
+
+      const bounds = scrollContainer.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.left + viewportWidth) {
+        return null;
+      }
+
+      return resolvePointerPointInScrollContainer(event, scrollContainer);
     },
   );
 
@@ -424,6 +453,8 @@ export function useViewport({
     state: {
       scrollContentHeight,
       layout,
+      sideColumn: resolvedSideColumn,
+      surfaceWidth,
       viewportWidth,
       viewportHeight,
       viewportTop,

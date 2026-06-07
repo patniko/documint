@@ -56,6 +56,7 @@ import type { CompletionSource } from "./completions/completions";
 import { createMentionCompletionSource, emojiCompletionSource } from "./completions/sources";
 import { InsertionLeaf } from "./overlays/leaves/InsertionLeaf";
 import { DocumentLeafAnchor } from "./overlays/leaves/core/DocumentLeafAnchor";
+import { resolveDocumentLeafResolution } from "./overlays/leaves/core/placement";
 import { OverlayLeaf } from "./overlays/leaves/core/OverlayLeaf";
 import type { DocumentLeafResolution } from "./overlays/leaves/core/shared";
 import { LinkLeaf } from "./overlays/leaves/LinkLeaf";
@@ -86,6 +87,7 @@ import { prepareCanvasLayer } from "./lib/canvas";
 import { emitDiagnostic } from "./lib/diagnostics";
 import { type EditorInputKeybinding } from "./lib/keybindings";
 import { extractMentionedUserIds } from "./lib/mentions";
+import type { DocumintLeafPlacement, DocumintSideColumnOptions } from "./lib/side-column";
 import { DocumentStorage } from "./lib/storage";
 import { type DocumintPatch } from "@/sync/content-patch";
 import { useDecorations, type DocumintDecoration } from "./hooks/useDecorations";
@@ -111,8 +113,11 @@ export type { DocumintDecoration } from "./hooks/useDecorations";
 export type { ActiveResourceSet, ResourceProtocolRecord } from "./hooks/useResources";
 export type { UserMentionEvent } from "./hooks/useSync";
 export type { CommentTrigger } from "./comment-trigger";
+export type { DocumintLeafPlacement, DocumintSideColumnOptions } from "./lib/side-column";
 export type { DocumintPatch, DocumintPatchChange } from "@/sync/content-patch";
 export { applyDocumintPatch } from "@/sync/content-patch";
+
+const SIDE_COLUMN_HOVER_HIDE_DELAY_MS = 350;
 
 export type DocumintProps = {
   content: string;
@@ -129,6 +134,8 @@ export type DocumintProps = {
   storage?: DocumintStorage;
   users?: DocumentUser[];
   commentTrigger?: CommentTrigger;
+  leafPlacement?: DocumintLeafPlacement;
+  sideColumn?: DocumintSideColumnOptions;
 
   // When `revision` is provided, `patch` is emitted for patchable edits and
   // `content` is only the snapshot fallback when `patch` is null.
@@ -216,6 +223,7 @@ function DocumintHost({
   content,
   keybindings,
   decorations,
+  leafPlacement = "inline",
   onCommentChanged,
   onContentChanged,
   onResourceOpened,
@@ -224,6 +232,7 @@ function DocumintHost({
   presence,
   resources,
   revision,
+  sideColumn,
   storage,
   theme,
   users,
@@ -269,8 +278,10 @@ function DocumintHost({
   }, []);
 
   const viewport = useViewport({
+    leafPlacement,
     onScrollSettle: requestScrollSettleRender,
     renderResources,
+    sideColumn,
     theme: preferredTheme,
   });
 
@@ -292,7 +303,13 @@ function DocumintHost({
     scrollTo,
   } = viewportActions;
 
-  const { layout, viewportWidth, viewportHeight, viewportTop } = viewportState;
+  const {
+    layout,
+    sideColumn: resolvedSideColumn,
+    viewportWidth,
+    viewportHeight,
+    viewportTop,
+  } = viewportState;
 
   const { scrollContainer: scrollContainerRef } = viewportRefs;
 
@@ -617,7 +634,10 @@ function DocumintHost({
     autoScrollDuringDrag,
     canvasRef: contentCanvasRef,
     commentTrigger,
+    deferHoverClear: resolvedSideColumn.placement === "side-column",
     focusInput: input.focus,
+    hoverHideDelayMs:
+      resolvedSideColumn.placement === "side-column" ? SIDE_COLUMN_HOVER_HIDE_DELAY_MS : undefined,
     isEditable,
     onActivity: idle.markActive,
     onResourceOpened,
@@ -765,11 +785,17 @@ function DocumintHost({
 
   const activeDocumentLeaf =
     documentCompletions.leaf ?? pointer.leaf ?? selection.leaf ?? cursor.leaf;
+  const activeDocumentLeafPlacement =
+    activeDocumentLeaf?.kind === "completion" ? "inline" : resolvedSideColumn.placement;
+  const sideColumnRailHandlers =
+    activeDocumentLeafPlacement === "side-column" && activeDocumentLeaf === pointer.leaf
+      ? pointer.leafHandlers
+      : undefined;
 
   // Resolve the active leaf's anchor target into pixel geometry against
-  // the prepared layout. Returns null when no leaf is active or its
-  // anchor falls outside the editor's visible window — the same gate the
-  // canvas painter applies to the caret.
+  // the prepared layout. Inline leaves keep the existing visible-window
+  // gate; side-column leaves stay resolvable so the anchor shell can clamp
+  // them inside the rail.
   const resolveDocumentLeafAnchor = (): DocumentLeafResolution | null => {
     if (!activeDocumentLeaf) {
       return null;
@@ -780,16 +806,8 @@ function DocumintHost({
       return null;
     }
 
-    const anchorBottom = measured.top + measured.height;
-    const viewportBottom = viewportTop + viewportHeight;
-    if (anchorBottom <= viewportTop || anchorBottom >= viewportBottom) {
-      return null;
-    }
-
-    // Doc-absolute coords let the browser handle host-page scrolls
-    // (including iOS keyboard auto-scroll) without window listeners. The
-    // host-rect read is gated by the early-returns above so it doesn't
-    // run on idle paint frames.
+    // Page-space coords let the browser handle host-page scrolls
+    // (including iOS keyboard auto-scroll) without window listeners.
     const scrollContainerBounds = scrollContainerRef.current?.getBoundingClientRect();
     const hostScrollX = window.scrollX;
     const hostScrollY = window.scrollY;
@@ -797,19 +815,23 @@ function DocumintHost({
     // leaves it active.
     const isHoverLeaf = activeDocumentLeaf === pointer.leaf;
 
-    return {
-      anchorHeight: measured.height,
-      // Hover leaves want the bridge for pointer hand-off (see styles.css).
-      bridge: isHoverLeaf,
-      left:
-        (scrollContainerBounds?.left ?? 0) +
-        hostScrollX +
-        (activeDocumentLeaf.leftOverride ?? measured.left),
-      onPointerEnter: isHoverLeaf ? pointer.leafHandlers.onPointerEnter : undefined,
-      onPointerLeave: isHoverLeaf ? pointer.leafHandlers.onPointerLeave : undefined,
-      paddingY: activeDocumentLeaf.paddingY ?? 0,
-      top: (scrollContainerBounds?.top ?? 0) + hostScrollY + anchorBottom - viewportTop,
-    };
+    return resolveDocumentLeafResolution({
+      context: {
+        hostScrollX,
+        hostScrollY,
+        scrollContainerLeft: scrollContainerBounds?.left ?? 0,
+        scrollContainerTop: scrollContainerBounds?.top ?? 0,
+        sideColumn: resolvedSideColumn,
+        viewportHeight,
+        viewportTop,
+      },
+      isHoverLeaf,
+      leaf: activeDocumentLeaf,
+      measured,
+      onPointerEnter: pointer.leafHandlers.onPointerEnter,
+      onPointerLeave: pointer.leafHandlers.onPointerLeave,
+      placement: activeDocumentLeafPlacement,
+    });
   };
   const documentLeafAnchor = resolveDocumentLeafAnchor();
 
@@ -1014,6 +1036,20 @@ function DocumintHost({
 
           {/* Scroll content wrapper (this forces a virtualized scroll height for the document, that is only partially rendered) */}
           <div {...viewportProps.scrollContent} className="documint-scroll-content">
+            {resolvedSideColumn.placement === "side-column" ? (
+              <div
+                aria-hidden="true"
+                className="documint-side-column"
+                style={{
+                  left: `${resolvedSideColumn.outerLeft}px`,
+                  paddingLeft: `${resolvedSideColumn.gap}px`,
+                  width: `${resolvedSideColumn.outerWidth}px`,
+                }}
+                onPointerEnter={sideColumnRailHandlers?.onPointerEnter}
+                onPointerLeave={sideColumnRailHandlers?.onPointerLeave}
+              />
+            ) : null}
+
             {/* Main content canvas (used for rendering the document viewport) */}
             <canvas
               {...input.canvasHandlers}
@@ -1022,13 +1058,19 @@ function DocumintHost({
               className="documint-content-canvas"
               style={{
                 cursor: pointer.cursor,
+                width: `${viewportWidth}px`,
               }}
               ref={contentCanvasRef}
               tabIndex={0}
             />
 
             {/* Overlay canvas (urrently used for rendering the blinking cursor) */}
-            <canvas aria-hidden="true" className="documint-overlay-canvas" ref={overlayCanvasRef} />
+            <canvas
+              aria-hidden="true"
+              className="documint-overlay-canvas"
+              ref={overlayCanvasRef}
+              style={{ width: `${viewportWidth}px` }}
+            />
 
             {/* Resize handles — selection and image handles via a unified declarative system */}
             {activeHandle && (

@@ -60,6 +60,17 @@
   overflow: hidden;
 }
 
+.documint-side-column {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  border-left: 1px solid var(--documint-leaf-border);
+  background: color-mix(in srgb, var(--documint-background) 92%, var(--documint-leaf-bg));
+  pointer-events: auto;
+}
+
 .documint-content-canvas {
   position: absolute;
   inset: 0 auto auto 0;

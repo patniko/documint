@@ -20,6 +20,7 @@ type DocumentLeafAnchorProps = {
 
 type DocumentLeafAnchorPlacement = {
   horizontalOffset: number;
+  topOffset: number;
   verticalPlacement: "above" | "below";
 };
 
@@ -30,6 +31,7 @@ type LeafShellSize = {
 
 const DEFAULT_PLACEMENT: DocumentLeafAnchorPlacement = {
   horizontalOffset: 0,
+  topOffset: 0,
   verticalPlacement: "below",
 };
 
@@ -52,7 +54,7 @@ export function DocumentLeafAnchor({ anchor, children }: DocumentLeafAnchorProps
       const next = resolveLeafPlacement(anchor, shellSize);
       return arePlacementsEqual(current, next) ? current : next;
     });
-  }, [anchor.left, anchor.top]);
+  }, [anchor.left, anchor.placement, anchor.top]);
 
   useLayoutEffect(() => {
     const shell = shellRef.current;
@@ -91,16 +93,18 @@ export function DocumentLeafAnchor({ anchor, children }: DocumentLeafAnchorProps
       <div
         className="documint-leaf-anchor"
         data-bridge={anchor.bridge}
+        data-placement-mode={anchor.placement}
         data-placement={placement.verticalPlacement}
         onPointerEnter={anchor.onPointerEnter}
         onPointerLeave={anchor.onPointerLeave}
         style={
           {
             left: `${anchor.left + placement.horizontalOffset}px`,
-            top: `${anchor.top}px`,
+            top: `${anchor.top + placement.topOffset}px`,
             "--documint-leaf-anchor-height": `${anchor.anchorHeight}px`,
             "--documint-leaf-bridge-height": `${LEAF_BRIDGE_HEIGHT}px`,
             "--documint-leaf-padding-y": `${anchor.paddingY}px`,
+            "--documint-leaf-width": anchor.width ? `${anchor.width}px` : undefined,
           } as CSSProperties
         }
       >
@@ -122,7 +126,12 @@ function resolveLeafPlacement(
   const visibleHeight = visualVp?.height ?? window.innerHeight;
   const visualOffsetLeft = visualVp?.offsetLeft ?? 0;
   const visualOffsetTop = visualVp?.offsetTop ?? 0;
-  // Anchor coordinates are doc-absolute; convert to visible-viewport
+
+  if (anchor.placement === "side-column") {
+    return resolveSideColumnLeafPlacement(anchor, shellSize, visibleHeight, visualOffsetTop);
+  }
+
+  // Anchor coordinates are page-space; convert to visible-viewport
   // relative to ask where the shell fits.
   const anchorScreenLeft = anchor.left - window.scrollX - visualOffsetLeft;
   const anchorScreenTop = anchor.top - window.scrollY - visualOffsetTop;
@@ -134,7 +143,29 @@ function resolveLeafPlacement(
       shellWidth: shellSize.width,
       visibleWidth,
     }),
+    topOffset: 0,
     verticalPlacement: shellSize.height + LEAF_BRIDGE_HEIGHT > spaceBelow ? "above" : "below",
+  };
+}
+
+function resolveSideColumnLeafPlacement(
+  anchor: DocumentLeafResolution,
+  shellSize: LeafShellSize,
+  visibleHeight: number,
+  visualOffsetTop: number,
+): DocumentLeafAnchorPlacement {
+  const viewportPadding = 8;
+  const minTop = window.scrollY + visualOffsetTop + viewportPadding;
+  const maxTop = Math.max(
+    minTop,
+    window.scrollY + visualOffsetTop + visibleHeight - shellSize.height - viewportPadding,
+  );
+  const clampedTop = Math.min(Math.max(anchor.top, minTop), maxTop);
+
+  return {
+    horizontalOffset: 0,
+    topOffset: clampedTop - anchor.top,
+    verticalPlacement: "below",
   };
 }
 
@@ -165,6 +196,7 @@ function arePlacementsEqual(
 ): boolean {
   return (
     left.horizontalOffset === right.horizontalOffset &&
+    left.topOffset === right.topOffset &&
     left.verticalPlacement === right.verticalPlacement
   );
 }

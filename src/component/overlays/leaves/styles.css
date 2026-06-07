@@ -52,6 +52,15 @@
       calc(-100% - var(--documint-leaf-anchor-height, 0px) - var(--documint-leaf-padding-y, 0px))
     );
   }
+
+  &[data-placement-mode="side-column"] {
+    box-sizing: border-box;
+    width: var(--documint-leaf-width);
+    padding-top: 0;
+    margin-top: 0;
+    pointer-events: none;
+    transform: none;
+  }
 }
 
 .documint-overlay-leaf {
@@ -103,6 +112,16 @@
 .documint-leaf-anchor[data-placement="above"][data-bridge="false"] .documint-leaf-shell {
   margin-top: 0;
   margin-bottom: var(--documint-leaf-bridge-height);
+}
+
+.documint-leaf-anchor[data-placement-mode="side-column"] .documint-leaf-shell {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 0;
+}
+
+.documint-leaf-anchor[data-placement-mode="side-column"] .documint-leaf-bridge {
+  display: none;
 }
 
 /* -- Shell: bordered, themed container that holds leaf content -- */
@@ -475,6 +494,14 @@
   width: var(--documint-leaf-width, min(18rem, calc(100vw - 4rem)));
 }
 
+.documint-leaf-anchor[data-placement-mode="side-column"]
+  .documint-comment-leaf:not(.documint-comment-leaf-create),
+.documint-leaf-anchor[data-placement-mode="side-column"] .documint-comment-leaf-create.is-expanded,
+.documint-leaf-anchor[data-placement-mode="side-column"] .documint-link-leaf {
+  box-sizing: border-box;
+  width: 100%;
+}
+
 .documint-comment-leaf-header,
 .documint-comment-leaf-actions,
 .documint-comment-message-meta {
@@ -689,6 +716,10 @@
     position: relative;
     z-index: 0;
   }
+}
+
+.documint-leaf-anchor[data-placement-mode="side-column"] .documint-comment-leaf-create-shell {
+  width: 100%;
 }
 
 .documint-comment-leaf-create-button {

@@ -174,6 +174,7 @@ export function useLeafInputCompletions({
               bridge: false,
               left: resolved.left,
               paddingY: 4,
+              placement: "inline",
               top: resolved.top,
             }
           : null,

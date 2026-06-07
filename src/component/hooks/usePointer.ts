@@ -45,7 +45,9 @@ type UsePointerOptions = {
   // Host callbacks the hook invokes.
   autoScrollDuringDrag: (event: PointerEvent<HTMLElement>) => void;
   commentTrigger: CommentTrigger;
+  deferHoverClear?: boolean;
   focusInput: FocusInput;
+  hoverHideDelayMs?: number;
   isEditable: boolean;
   onActivity: () => void;
   onResourceOpened?: (resource: DocumentResourceReference) => void;
@@ -156,7 +158,9 @@ export function usePointer({
   autoScrollDuringDrag,
   canvasRef,
   commentTrigger,
+  deferHoverClear = false,
   focusInput,
+  hoverHideDelayMs = HOVER_HIDE_DELAY_MS,
   isEditable,
   onActivity,
   onResourceOpened,
@@ -234,11 +238,16 @@ export function usePointer({
       if (!isLeafHoveredRef.current) {
         setHoverTarget(null);
       }
-    }, HOVER_HIDE_DELAY_MS);
+    }, hoverHideDelayMs);
   });
 
   const clearLeafIfPointerIsOutsideLeaf = useEffectEvent(() => {
     if (!isLeafHoveredRef.current) {
+      if (deferHoverClear) {
+        scheduleHide();
+        return;
+      }
+
       cancelHide();
       setHoverTarget(null);
     }

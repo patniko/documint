@@ -9,6 +9,7 @@ import {
   type DocumentUser,
   type DocumintActions,
   type DocumintDecoration,
+  type DocumintLeafPlacement,
   type DocumintPatch,
   type DocumintStorage,
   type UserMentionEvent,
@@ -120,6 +121,12 @@ const protocols = {
 
 const activeResources = new Set(["demo-resource://recording/live"]);
 
+const playgroundSideColumn = {
+  gap: 16,
+  minTextWidth: 360,
+  width: 320,
+};
+
 const fixtureSurfaceClassName =
   "grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden rounded-2xl border border-border/[0.08] bg-background/[0.82] max-[700px]:portrait:h-auto";
 
@@ -130,6 +137,7 @@ export function Playground() {
   const [fixtureId, setFixtureId] = useState<string>(fixtureOptions[0].id);
   const [themeId, setThemeId] = useState<string>(themeOptions[0].id);
   const [commentTrigger, setCommentTrigger] = useState<CommentTrigger>("hover-or-caret");
+  const [leafPlacement, setLeafPlacement] = useState<DocumintLeafPlacement>("inline");
   const [themePopoverOpen, setThemePopoverOpen] = useState(false);
 
   const [users, setUsers] = useState<DocumentUser[]>([]);
@@ -228,6 +236,18 @@ export function Playground() {
             </select>
           </label>
 
+          <label className="font-controls grid gap-[0.35rem]">
+            <select
+              aria-label="Select leaf placement"
+              className="font-controls w-full rounded-xl border border-border/[0.14] bg-background/90 px-3 py-2"
+              onChange={(event) => setLeafPlacement(event.target.value as DocumintLeafPlacement)}
+              value={leafPlacement}
+            >
+              <option value="inline">Tools: inline</option>
+              <option value="side-column">Tools: side column</option>
+            </select>
+          </label>
+
           <UsersPopover
             key={`${fixtureId}-users`}
             content={fileContent}
@@ -254,7 +274,9 @@ export function Playground() {
             <Documint
               commentTrigger={commentTrigger}
               content={editorContent}
+              leafPlacement={leafPlacement}
               revision={String(revision)}
+              sideColumn={playgroundSideColumn}
               theme={activeTheme ?? undefined}
               users={mentionUsers}
               presence={presence}
